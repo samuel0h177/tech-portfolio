@@ -1,0 +1,43 @@
+:root {
+  font-family: 'Public Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.eyebrow {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.hero-gradient {
+  background:
+    linear-gradient(
+      115deg,
+      rgba(9, 40, 107, 0.94) 0%,
+      rgba(11, 61, 145, 0.82) 40%,
+      rgba(26, 117, 207, 0.55) 100%
+    ),
+    url('https://esto.nasa.gov/wp-content/uploads/2020/03/parallax_image_full_bottom_layer.png')
+      center 42% / cover no-repeat;
+  color: #fff;
+}
+
+.result-title {
+  color: #0b3d91;
+  text-decoration: none;
+}
+.result-title:hover {
+  text-decoration: underline;
+}
+
+.trl-ladder {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}

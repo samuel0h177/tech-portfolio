@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// ESTO vs. Other (non-ESTO-funded) programs
+enum ProgramFlag {
+  ESTO
+  OTHER
+}
+
+/// Legacy organization "center_lu" groupings
+enum OrganizationType {
+  ACADEMIA
+  INDUSTRY
+  NASA_CENTER
+  FEDERAL_LAB
+}
+
+model PrincipalInvestigator {
+  id        Int       @id @default(autoincrement())
+  firstName String    @map("first_name")
+  lastName  String    @map("last_name")
+  /// PI home center/organization label as shown in results (e.g. LaRC, GSFC)
+  orgCenter String?   @map("org_center")
+  projects  Project[]
+
+  @@unique([firstName, lastName, orgCenter], name: "pi_identity")
+  @@index([lastName, firstName])
+  @@map("principal_investigators")
+}
+
+model Organization {
+  id       Int               @id @default(autoincrement())
+  /// Institution label as shown in results (e.g. JPL, GSFC, MIT)
+  name     String            @unique
+  /// Classification derived from the legacy center_lu_id facet; null until enriched
+  type     OrganizationType?
+  projects Project[]
+
+  @@index([type])
+  @@map("organizations")
+}
+
+model TechCategory {
+  id       Int    @id @default(autoincrement())
+  name     String
+  /// Legacy general category id (gen_tech_category_id): Sensors=1, Info Systems=5, etc.
+  legacyGenId Int? @map("legacy_gen_id")
+  /// Legacy sub category id (the numeric part of tech_category_id like 1_5 -> 5)
+  legacySubId Int? @map("legacy_sub_id")
+  parentId Int?   @map("parent_id")
+  parent   TechCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children TechCategory[] @relation("CategoryTree")
+  projects ProjectTechCategory[]
+
+  @@unique([legacyGenId, legacySubId], name: "legacy_category")
+  @@index([parentId])
+  @@map("tech_categories")
+}
+
+model Project {
+  id              Int          @id @default(autoincrement())
+  /// Internal id from the live site, used to build legacy PDF URLs
+  sourceInternalId Int?        @map("source_internal_id")
+  programFlag     ProgramFlag  @map("program_flag")
+  /// Funding program name shown in the results "Program" column (e.g. "ES R&A", "ESTO", "IIP")
+  programName     String?      @map("program_name")
+  /// Human-facing project code (e.g. LRRP05, IIP-QRS-16)
+  projectCode     String?      @map("project_code")
+  title           String       @db.Text
+  abstract        String?      @db.Text
+  /// true when the project is completed
+  completed       Boolean      @default(false)
+  /// Raw status label from the site (e.g. "Active", "Project Complete FY15")
+  statusText      String?      @map("status_text")
+  completionFy    Int?         @map("completion_fy")
+  trlIn           Int?         @map("trl_in")
+  trlCurrent      Int?         @map("trl_current")
+  trlOut          Int?         @map("trl_out")
+  quadChartUrl    String?      @map("quad_chart_url") @db.Text
+
+  piId            Int?         @map("pi_id")
+  pi              PrincipalInvestigator? @relation(fields: [piId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  organizationId  Int?         @map("organization_id")
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  categories      ProjectTechCategory[]
+  documents       ProjectDocument[]
+
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([projectCode, sourceInternalId], name: "project_identity")
+  @@index([programFlag])
+  @@index([completed])
+  @@index([piId])
+  @@index([organizationId])
+  @@fulltext([title, abstract])
+  @@map("projects")
+}
+
+model ProjectTechCategory {
+  projectId  Int          @map("project_id")
+  categoryId Int          @map("category_id")
+  project    Project      @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  category   TechCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([projectId, categoryId])
+  @@index([categoryId])
+  @@map("project_tech_categories")
+}
+
+model ProjectDocument {
+  id           Int       @id @default(autoincrement())
+  projectId    Int       @map("project_id")
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  fileName     String    @map("file_name")
+  fileSize     Int?      @map("file_size")
+  lastModified DateTime? @map("last_modified")
+  /// Live NASA URL (hot-linked, not stored locally)
+  url          String    @db.Text
+
+  @@index([projectId])
+  @@map("project_documents")
+}
+
+model AdminUser {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("admin_users")
+}

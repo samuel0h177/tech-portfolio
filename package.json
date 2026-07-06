@@ -1,0 +1,40 @@
+{
+  "name": "esto-portfolio-remake",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Modern remake of the NASA ESTO Technology Portfolio search (MySQL 9 + NestJS + Vue 3/Vuetify).",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "apps/scraper"
+  ],
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "prisma db seed",
+    "db:reset": "prisma migrate reset --force",
+    "scrape": "npm run scrape --workspace apps/scraper",
+    "dev:api": "npm run start:dev --workspace apps/api",
+    "dev:web": "npm run dev --workspace apps/web",
+    "build": "npm run build --workspace apps/api && npm run build --workspace apps/web"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.10.2",
+    "prisma": "^6.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.1.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
