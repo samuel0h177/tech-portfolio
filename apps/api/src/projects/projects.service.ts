@@ -59,7 +59,7 @@ export class ProjectsService {
     if (dto.pi) {
       const like = `%${dto.pi}%`;
       conds.push(
-        Prisma.sql`p.pi_id IN (SELECT pi.id FROM principal_investigators pi WHERE CONCAT(pi.last_name, ', ', pi.first_name) LIKE ${like} OR pi.first_name LIKE ${like} OR pi.last_name LIKE ${like})`,
+        Prisma.sql`p.pi_id IN (SELECT pi.id FROM investigators pi WHERE CONCAT(pi.last_name, ', ', pi.first_name) LIKE ${like} OR pi.first_name LIKE ${like} OR pi.last_name LIKE ${like})`,
       );
     }
 
@@ -106,7 +106,7 @@ export class ProjectsService {
     const idRows = await this.prisma.$queryRaw<{ id: number }[]>(Prisma.sql`
       SELECT p.id
       FROM projects p
-      LEFT JOIN principal_investigators pi ON pi.id = p.pi_id
+      LEFT JOIN investigators pi ON pi.id = p.pi_id
       ${whereSql}
       ORDER BY ${orderSql}
       LIMIT ${dto.pageSize} OFFSET ${offset}
@@ -115,7 +115,7 @@ export class ProjectsService {
     const countRows = await this.prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
       SELECT COUNT(*) AS total
       FROM projects p
-      LEFT JOIN principal_investigators pi ON pi.id = p.pi_id
+      LEFT JOIN investigators pi ON pi.id = p.pi_id
       ${whereSql}
     `);
     const total = Number(countRows[0]?.total ?? 0);
@@ -246,6 +246,10 @@ export class ProjectsService {
         pi: true,
         organization: true,
         categories: { include: { category: true } },
+        investigators: {
+          include: { investigator: true, organization: true },
+          orderBy: [{ role: 'asc' }, { id: 'asc' }],
+        },
         documents: true,
       },
     });
@@ -256,7 +260,20 @@ export class ProjectsService {
       trlIn: p.trlIn,
       trlCurrent: p.trlCurrent,
       trlOut: p.trlOut,
+      projectAbbrev: p.projectAbbrev,
+      budgetCode: p.budgetCode,
       sourceInternalId: p.sourceInternalId,
+      investigators: p.investigators.map((link) => ({
+        id: link.investigator.id,
+        firstName: link.investigator.firstName,
+        middleName: link.investigator.middleName,
+        lastName: link.investigator.lastName,
+        title: link.investigator.title,
+        role: link.role,
+        organization: link.organization
+          ? { id: link.organization.id, name: link.organization.name, type: link.organization.type }
+          : null,
+      })),
       documents: p.documents.map((d) => ({
         id: d.id,
         fileName: d.fileName,

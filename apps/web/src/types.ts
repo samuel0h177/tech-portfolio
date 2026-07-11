@@ -41,12 +41,27 @@ export interface ProjectDocument {
   url: string;
 }
 
+export type InvestigatorRole = 'PRINCIPAL' | 'CO_INVESTIGATOR';
+
+export interface ProjectInvestigator {
+  id: number;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  title: string | null;
+  role: InvestigatorRole;
+  organization: OrgRef | null;
+}
+
 export interface ProjectDetail extends ProjectListItem {
   abstract: string | null;
   trlIn: number | null;
   trlCurrent: number | null;
   trlOut: number | null;
+  projectAbbrev: string | null;
+  budgetCode: string | null;
   sourceInternalId: number | null;
+  investigators: ProjectInvestigator[];
   documents: ProjectDocument[];
 }
 

@@ -1,27 +1,34 @@
 <template>
-  <div>
-    <v-container style="max-width: 1200px" class="py-6">
-      <v-btn variant="text" color="primary" prepend-icon="mdi-arrow-left" to="/" class="mb-3">
-        Back to search
-      </v-btn>
+  <div class="search-page">
+    <!-- Header scrim over the shared NASA backdrop -->
+    <section class="hero-gradient">
+      <v-container style="max-width: 1200px" class="py-6">
+        <v-btn variant="text" color="white" prepend-icon="mdi-arrow-left" to="/" class="mb-3">
+          Back to search
+        </v-btn>
 
+        <template v-if="project">
+          <div class="d-flex align-center ga-2 mb-2 flex-wrap">
+            <v-chip :color="project.programFlag === 'ESTO' ? 'primary' : 'secondary'" variant="flat" label>
+              {{ project.programName || project.programFlag }}
+            </v-chip>
+            <span v-if="project.projectCode" class="font-weight-bold text-white">
+              {{ project.projectCode }}
+            </span>
+            <v-chip :color="project.completed ? 'success' : 'warning'" variant="flat" label>
+              {{ project.statusText || (project.completed ? 'Complete' : 'Active') }}
+            </v-chip>
+          </div>
+
+          <h1 class="text-h4 font-weight-bold">{{ project.title }}</h1>
+        </template>
+      </v-container>
+    </section>
+
+    <v-container style="max-width: 1200px" class="py-6">
       <v-progress-linear v-if="loading" indeterminate color="primary" />
 
       <template v-if="project">
-        <div class="d-flex align-center ga-2 mb-2 flex-wrap">
-          <v-chip :color="project.programFlag === 'ESTO' ? 'primary' : 'secondary'" label>
-            {{ project.programName || project.programFlag }}
-          </v-chip>
-          <span v-if="project.projectCode" class="font-weight-bold text-medium-emphasis">
-            {{ project.projectCode }}
-          </span>
-          <v-chip :color="project.completed ? 'success' : 'warning'" variant="tonal" label>
-            {{ project.statusText || (project.completed ? 'Complete' : 'Active') }}
-          </v-chip>
-        </div>
-
-        <h1 class="text-h4 font-weight-bold mb-4">{{ project.title }}</h1>
-
         <v-row>
           <v-col cols="12" md="8">
             <v-card variant="flat" border class="mb-4">
@@ -60,6 +67,24 @@
                 style="width: 100%; height: 640px; border: 0"
                 title="Quad chart"
               />
+            </v-card>
+
+            <!-- Project team: PI + Co-Investigators -->
+            <v-card v-if="project.investigators.length" variant="flat" border class="mb-4">
+              <v-card-title class="text-subtitle-1 font-weight-bold">Project Team</v-card-title>
+              <v-divider />
+              <v-list density="comfortable">
+                <v-list-item
+                  v-for="person in project.investigators"
+                  :key="person.id + '-' + person.role"
+                  :prepend-icon="person.role === 'PRINCIPAL' ? 'mdi-account-star' : 'mdi-account'"
+                >
+                  <v-list-item-title>{{ personName(person) }}</v-list-item-title>
+                  <v-list-item-subtitle>
+                    {{ roleLabel(person.role) }}<template v-if="person.organization"> · {{ person.organization.name }}</template>
+                  </v-list-item-subtitle>
+                </v-list-item>
+              </v-list>
             </v-card>
           </v-col>
 
@@ -105,7 +130,7 @@
               </v-card-text>
             </v-card>
 
-            <v-card variant="flat" border class="mb-4">
+            <v-card v-if="project.categories.length || project.subCategories.length" variant="flat" border class="mb-4">
               <v-card-title class="text-subtitle-1 font-weight-bold">Technology Categories</v-card-title>
               <v-divider />
               <v-card-text class="d-flex ga-1 flex-wrap">
@@ -148,7 +173,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { api } from '@/api/client';
-import type { ProjectDetail } from '@/types';
+import type { ProjectDetail, ProjectInvestigator } from '@/types';
 import { ORG_TYPE_LABELS } from '@/types';
 
 const props = defineProps<{ id: string }>();
@@ -175,6 +200,14 @@ const formatSize = (bytes: number) => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
+
+const personName = (p: ProjectInvestigator) => {
+  const parts = [p.title, p.firstName, p.middleName, p.lastName].filter(Boolean);
+  return parts.join(' ');
+};
+
+const roleLabel = (role: ProjectInvestigator['role']) =>
+  role === 'PRINCIPAL' ? 'Principal Investigator' : 'Co-Investigator';
 
 async function load(id: string) {
   loading.value = true;

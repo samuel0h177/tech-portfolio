@@ -98,26 +98,26 @@ export class AdminService {
     return { deleted: true, id };
   }
 
-  // ---- Principal Investigators ----
+  // ---- Investigators ----
   listPis() {
-    return this.prisma.principalInvestigator.findMany({ orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }] });
+    return this.prisma.investigator.findMany({ orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }] });
   }
 
   createPi(dto: UpsertPiDto) {
-    return this.prisma.principalInvestigator.create({
+    return this.prisma.investigator.create({
       data: { firstName: dto.firstName, lastName: dto.lastName, orgCenter: dto.orgCenter ?? null },
     });
   }
 
   updatePi(id: number, dto: UpsertPiDto) {
-    return this.prisma.principalInvestigator.update({
+    return this.prisma.investigator.update({
       where: { id },
       data: { firstName: dto.firstName, lastName: dto.lastName, orgCenter: dto.orgCenter ?? null },
     });
   }
 
   async deletePi(id: number) {
-    await this.prisma.principalInvestigator.delete({ where: { id } });
+    await this.prisma.investigator.delete({ where: { id } });
     return { deleted: true, id };
   }
 

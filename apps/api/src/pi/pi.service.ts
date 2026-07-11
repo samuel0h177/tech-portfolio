@@ -6,7 +6,7 @@ export class PiService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(q?: string, limit = 50) {
-    const pis = await this.prisma.principalInvestigator.findMany({
+    const pis = await this.prisma.investigator.findMany({
       where: q
         ? {
             OR: [

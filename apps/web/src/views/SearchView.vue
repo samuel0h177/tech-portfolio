@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="search-page">
     <!-- Hero / search bar -->
     <section class="hero-gradient">
       <v-container style="max-width: 1400px" class="py-8">
@@ -70,24 +70,44 @@
 
         <!-- Results -->
         <v-col cols="12" md="9">
-          <div class="d-flex align-center flex-wrap ga-3 mb-4">
+          <div class="d-flex align-center flex-wrap ga-3 mb-4 results-toolbar">
             <div>
               <span class="text-h6 font-weight-bold">{{ formatNumber(results.total) }}</span>
-              <span class="text-medium-emphasis"> project{{ results.total === 1 ? '' : 's' }} found</span>
+              <span> project{{ results.total === 1 ? '' : 's' }} found</span>
             </div>
             <v-spacer />
-            <v-select
-              v-model="filters.sortBy"
-              :items="sortOptions"
-              label="Sort by"
-              style="max-width: 200px"
+            <div class="d-flex align-center ga-2">
+              <span class="text-body-2 font-weight-medium">Sort by</span>
+              <v-select
+                v-model="filters.sortBy"
+                :items="sortOptions"
+                style="max-width: 190px"
+                density="compact"
+                variant="solo"
+                flat
+                hide-details
+                bg-color="surface"
+              />
+            </div>
+            <v-btn-toggle
+              v-model="filters.sortOrder"
+              mandatory
               density="compact"
-            />
-            <v-btn-toggle v-model="filters.sortOrder" mandatory density="compact" variant="outlined" divided>
+              variant="outlined"
+              divided
+              class="bg-surface"
+            >
               <v-btn value="asc" icon="mdi-sort-ascending" size="small" />
               <v-btn value="desc" icon="mdi-sort-descending" size="small" />
             </v-btn-toggle>
-            <v-btn-toggle v-model="viewMode" mandatory density="compact" variant="outlined" divided>
+            <v-btn-toggle
+              v-model="viewMode"
+              mandatory
+              density="compact"
+              variant="outlined"
+              divided
+              class="bg-surface"
+            >
               <v-btn value="cards" icon="mdi-view-grid-outline" size="small" />
               <v-btn value="table" icon="mdi-table" size="small" />
             </v-btn-toggle>
@@ -180,7 +200,7 @@
               </v-table>
             </v-card>
 
-            <div class="d-flex align-center flex-wrap ga-3 mt-4">
+            <div class="d-flex align-center flex-wrap ga-3 mt-4 pagination-bar">
               <v-pagination
                 v-model="filters.page"
                 :length="results.totalPages"
@@ -188,13 +208,19 @@
                 density="comfortable"
               />
               <v-spacer />
-              <v-select
-                v-model="filters.pageSize"
-                :items="[10, 25, 50, 100]"
-                label="Per page"
-                density="compact"
-                style="max-width: 120px"
-              />
+              <div class="d-flex align-center ga-2">
+                <span class="text-body-2 font-weight-medium">Per page</span>
+                <v-select
+                  v-model="filters.pageSize"
+                  :items="[10, 25, 50, 100]"
+                  density="compact"
+                  variant="solo"
+                  flat
+                  hide-details
+                  style="max-width: 90px"
+                  bg-color="surface"
+                />
+              </div>
             </div>
           </template>
 

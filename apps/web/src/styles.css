@@ -15,16 +15,36 @@ body {
   font-weight: 700;
 }
 
-.hero-gradient {
+/* NASA ESTO scene as a prominent, fixed backdrop behind the whole search page. */
+.search-page {
+  min-height: calc(100vh - 72px);
   background:
-    linear-gradient(
-      115deg,
-      rgba(9, 40, 107, 0.94) 0%,
-      rgba(11, 61, 145, 0.82) 40%,
-      rgba(26, 117, 207, 0.55) 100%
-    ),
     url('https://esto.nasa.gov/wp-content/uploads/2020/03/parallax_image_full_bottom_layer.png')
-      center 42% / cover no-repeat;
+    center center / cover no-repeat fixed;
+}
+
+/* Light scrim over the hero just for white-text legibility. */
+.hero-gradient {
+  background: linear-gradient(
+    115deg,
+    rgba(9, 40, 107, 0.45) 0%,
+    rgba(11, 61, 145, 0.22) 45%,
+    rgba(26, 117, 207, 0.08) 100%
+  );
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+/* Toolbars sit directly on the backdrop; give them a subtle scrim for legibility. */
+.results-toolbar,
+.pagination-bar {
+  color: #fff;
+  background: rgba(9, 40, 107, 0.42);
+  border-radius: 12px;
+  padding: 8px 14px;
+  backdrop-filter: blur(2px);
+}
+.results-toolbar .text-h6 {
   color: #fff;
 }
 

@@ -13,7 +13,7 @@ enum ProgramFlag {
   OTHER
 }
 
-/// Legacy organization "center_lu" groupings
+/// Organization classification derived from the center_lu hierarchy root
 enum OrganizationType {
   ACADEMIA
   INDUSTRY
@@ -21,87 +21,127 @@ enum OrganizationType {
   FEDERAL_LAB
 }
 
-model PrincipalInvestigator {
-  id        Int       @id @default(autoincrement())
-  firstName String    @map("first_name")
-  lastName  String    @map("last_name")
-  /// PI home center/organization label as shown in results (e.g. LaRC, GSFC)
-  orgCenter String?   @map("org_center")
-  projects  Project[]
+/// Role a person plays on a project (from investigator_type_lu)
+enum InvestigatorRole {
+  PRINCIPAL
+  CO_INVESTIGATOR
+}
 
-  @@unique([firstName, lastName, orgCenter], name: "pi_identity")
+model Investigator {
+  id         Int     @id @default(autoincrement())
+  /// Source investigator_lu.INVESTIGATOR_LU_ID
+  sourceId   Int?    @unique @map("source_id")
+  firstName  String  @map("first_name")
+  middleName String? @map("middle_name")
+  lastName   String  @map("last_name")
+  title      String?
+  /// Optional display center label; per-link organization is authoritative
+  orgCenter  String? @map("org_center")
+
+  /// Projects where this person is the primary PI (denormalized)
+  projects     Project[]
+  projectLinks ProjectInvestigator[]
+
   @@index([lastName, firstName])
-  @@map("principal_investigators")
+  @@map("investigators")
 }
 
 model Organization {
   id       Int               @id @default(autoincrement())
-  /// Institution label as shown in results (e.g. JPL, GSFC, MIT)
+  /// Source center_lu.CENTER_LU_ID
+  sourceId Int?              @unique @map("source_id")
+  /// Institution label (e.g. JPL, GSFC, MIT)
   name     String            @unique
-  /// Classification derived from the legacy center_lu_id facet; null until enriched
+  /// Classification derived from the center_lu parent root
   type     OrganizationType?
-  projects Project[]
+
+  projects          Project[]
+  investigatorLinks ProjectInvestigator[]
 
   @@index([type])
   @@map("organizations")
 }
 
 model TechCategory {
-  id       Int    @id @default(autoincrement())
-  name     String
-  /// Legacy general category id (gen_tech_category_id): Sensors=1, Info Systems=5, etc.
-  legacyGenId Int? @map("legacy_gen_id")
-  /// Legacy sub category id (the numeric part of tech_category_id like 1_5 -> 5)
-  legacySubId Int? @map("legacy_sub_id")
-  parentId Int?   @map("parent_id")
-  parent   TechCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  children TechCategory[] @relation("CategoryTree")
-  projects ProjectTechCategory[]
+  id          Int     @id @default(autoincrement())
+  /// Source tech_category_lu.TECH_CATEGORY_LU_ID
+  sourceId    Int?    @unique @map("source_id")
+  name        String
+  description String? @db.Text
+  dispOrder   Int?    @map("disp_order")
+  parentId    Int?    @map("parent_id")
+  parent      TechCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children    TechCategory[] @relation("CategoryTree")
+  projects    ProjectTechCategory[]
 
-  @@unique([legacyGenId, legacySubId], name: "legacy_category")
   @@index([parentId])
   @@map("tech_categories")
 }
 
 model Project {
-  id              Int          @id @default(autoincrement())
-  /// Internal id from the live site, used to build legacy PDF URLs
-  sourceInternalId Int?        @map("source_internal_id")
-  programFlag     ProgramFlag  @map("program_flag")
-  /// Funding program name shown in the results "Program" column (e.g. "ES R&A", "ESTO", "IIP")
-  programName     String?      @map("program_name")
-  /// Human-facing project code (e.g. LRRP05, IIP-QRS-16)
-  projectCode     String?      @map("project_code")
-  title           String       @db.Text
-  abstract        String?      @db.Text
+  id               Int          @id @default(autoincrement())
+  /// Source investment.INVESTMENT_ID (stable identity for imports)
+  sourceInternalId Int?         @unique @map("source_internal_id")
+  programFlag      ProgramFlag  @map("program_flag")
+  /// Funding program name (e.g. "ES R&A", "ESTO", "IIP")
+  programName      String?      @map("program_name")
+  /// Human-facing project code (investment.projectid, e.g. ACT-02-0040)
+  projectCode      String?      @map("project_code")
+  /// Program line abbreviation (investment.projectabbrev, e.g. ACT, IIP)
+  projectAbbrev    String?      @map("project_abbrev")
+  /// Internal budget code (investment.ESTO_PROJ_NUM)
+  budgetCode       String?      @map("budget_code")
+  title            String       @db.Text
+  abstract         String?      @db.Text
   /// true when the project is completed
-  completed       Boolean      @default(false)
-  /// Raw status label from the site (e.g. "Active", "Project Complete FY15")
-  statusText      String?      @map("status_text")
-  completionFy    Int?         @map("completion_fy")
-  trlIn           Int?         @map("trl_in")
-  trlCurrent      Int?         @map("trl_current")
-  trlOut          Int?         @map("trl_out")
-  quadChartUrl    String?      @map("quad_chart_url") @db.Text
+  completed        Boolean      @default(false)
+  /// Raw status label (proj_status_lu.PROJ_STATUS_NAME)
+  statusText       String?      @map("status_text")
+  /// Raw source year (investment.YEAR_VALID)
+  yearValid        String?      @map("year_valid")
+  completionFy     Int?         @map("completion_fy")
+  trlIn            Int?         @map("trl_in")
+  trlCurrent       Int?         @map("trl_current")
+  trlOut           Int?         @map("trl_out")
+  quadChartUrl     String?      @map("quad_chart_url") @db.Text
 
-  piId            Int?         @map("pi_id")
-  pi              PrincipalInvestigator? @relation(fields: [piId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  organizationId  Int?         @map("organization_id")
-  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  piId             Int?         @map("pi_id")
+  pi               Investigator? @relation(fields: [piId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  organizationId   Int?         @map("organization_id")
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
-  categories      ProjectTechCategory[]
-  documents       ProjectDocument[]
+  categories       ProjectTechCategory[]
+  investigators    ProjectInvestigator[]
+  documents        ProjectDocument[]
 
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
 
-  @@unique([projectCode, sourceInternalId], name: "project_identity")
   @@index([programFlag])
   @@index([completed])
   @@index([piId])
   @@index([organizationId])
   @@fulltext([title, abstract])
   @@map("projects")
+}
+
+model ProjectInvestigator {
+  id             Int              @id @default(autoincrement())
+  /// Source xref_invest_investigators.QC_XREF_INVESTIGATOR_ID
+  sourceXrefId   Int?             @unique @map("source_xref_id")
+  projectId      Int              @map("project_id")
+  investigatorId Int              @map("investigator_id")
+  role           InvestigatorRole @default(PRINCIPAL)
+  organizationId Int?             @map("organization_id")
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  investigator Investigator  @relation(fields: [investigatorId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([projectId])
+  @@index([investigatorId])
+  @@index([organizationId])
+  @@map("project_investigators")
 }
 
 model ProjectTechCategory {
