@@ -9,6 +9,7 @@
     "apps/scraper"
   ],
   "scripts": {
+    "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",
@@ -17,7 +18,8 @@
     "scrape": "npm run scrape --workspace apps/scraper",
     "dev:api": "npm run start:dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
-    "build": "npm run build --workspace apps/api && npm run build --workspace apps/web"
+    "build": "npm run build --workspace apps/web && npm run build --workspace apps/api",
+    "start": "node apps/api/dist/main.js"
   },
   "prisma": {
     "schema": "prisma/schema.prisma",
