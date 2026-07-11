@@ -1,10 +1,10 @@
 <template>
   <v-app>
-    <v-app-bar flat color="primary" height="72">
+    <v-app-bar flat color="#0b3d91" height="72">
       <v-container class="d-flex align-center py-0" style="max-width: 1400px">
         <router-link to="/" class="d-flex align-center text-white" style="text-decoration: none">
           <v-avatar color="white" size="44" class="mr-3">
-            <span class="text-primary font-weight-black" style="font-size: 15px">ESTO</span>
+            <span class="font-weight-black" style="font-size: 15px; color: #0b3d91">ESTO</span>
           </v-avatar>
           <div>
             <div class="eyebrow" style="opacity: 0.85">NASA Earth Science Technology Office</div>
@@ -23,6 +23,17 @@
           ESTO.nasa.gov
         </v-btn>
         <v-btn variant="tonal" color="white" to="/admin" prepend-icon="mdi-shield-account">Admin</v-btn>
+        <v-btn
+          icon
+          variant="text"
+          color="white"
+          class="ml-1"
+          :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          @click="toggleTheme"
+        >
+          <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
+        </v-btn>
       </v-container>
     </v-app-bar>
 
@@ -51,9 +62,24 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
+import { useTheme } from 'vuetify';
 import { useAuthStore } from '@/stores/auth';
+import { DARK_THEME, LIGHT_THEME, THEME_STORAGE_KEY } from '@/plugins/vuetify';
 
 const auth = useAuthStore();
 onMounted(() => auth.fetchMe());
+
+const theme = useTheme();
+const isDark = computed(() => theme.global.name.value === DARK_THEME);
+
+function toggleTheme() {
+  const next = isDark.value ? LIGHT_THEME : DARK_THEME;
+  theme.global.name.value = next;
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch {
+    /* ignore persistence failures */
+  }
+}
 </script>

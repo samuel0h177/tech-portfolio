@@ -23,11 +23,47 @@ const estoLight = {
   },
 };
 
+const estoDark = {
+  dark: true,
+  colors: {
+    background: '#0b1120',
+    surface: '#151d2e',
+    'surface-variant': '#1f2942',
+    primary: '#5aa2f0', // lighter blue so text/links stay legible on dark surfaces
+    'primary-darken-1': '#0b3d91',
+    secondary: '#7ab8ff',
+    accent: '#8fd1fb',
+    info: '#5aa2f0',
+    success: '#3fa877',
+    warning: '#e0982f',
+    error: '#e05545',
+    'on-primary': '#0a1020', // dark text on the lighter primary fill
+    'on-surface': '#e6ebf5',
+  },
+};
+
+export const THEME_STORAGE_KEY = 'esto-theme';
+export const LIGHT_THEME = 'estoLight';
+export const DARK_THEME = 'estoDark';
+
+/** Initial theme from a saved preference, falling back to the OS setting. */
+function initialTheme(): string {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === LIGHT_THEME || stored === DARK_THEME) return stored;
+  } catch {
+    /* localStorage may be unavailable */
+  }
+  const prefersDark =
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  return prefersDark ? DARK_THEME : LIGHT_THEME;
+}
+
 export default createVuetify({
   icons: { defaultSet: 'mdi', aliases, sets: { mdi } },
   theme: {
-    defaultTheme: 'estoLight',
-    themes: { estoLight },
+    defaultTheme: initialTheme(),
+    themes: { estoLight, estoDark },
   },
   defaults: {
     VCard: { rounded: 'lg' },
