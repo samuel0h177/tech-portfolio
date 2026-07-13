@@ -108,21 +108,50 @@ async function main() {
   }
   log(`Loaded ${orgIdByNameKey.size} organizations (${orgIdBySource.size} source centers mapped).`);
 
-  // ---- 4. Investigators ----
+  // ---- 4. Investigators (de-duped by normalized name) ----
+  // The source has many investigator_lu rows for the same physical person (the UI
+  // filter and display only ever use "last, first"). Collapse them into one row per
+  // person and map every source id onto it, so dropdown counts and name-based filtering
+  // agree. The richest middle name / title across duplicates is kept.
   const investigatorIdBySource = new Map<number, number>();
+  const invNameKey = (last: string, first: string) =>
+    `${last.trim().toLowerCase()}|${first.trim().toLowerCase()}`;
+  type InvAgg = {
+    firstName: string;
+    lastName: string;
+    middleName: string | null;
+    title: string | null;
+    sourceIds: number[];
+  };
+  const invByKey = new Map<string, InvAgg>();
   for (const p of invRows) {
+    const firstName = String(p.FIRST_NAME ?? '').trim();
+    const lastName = String(p.LAST_NAME ?? '').trim();
+    const middleName = p.MIDDLE_NAME ? String(p.MIDDLE_NAME).trim() || null : null;
+    const title = p.TITLE ? String(p.TITLE).trim() || null : null;
+    const key = invNameKey(lastName, firstName);
+    const agg = invByKey.get(key);
+    if (!agg) {
+      invByKey.set(key, { firstName, lastName, middleName, title, sourceIds: [p.INVESTIGATOR_LU_ID as number] });
+    } else {
+      if (!agg.middleName && middleName) agg.middleName = middleName;
+      if (!agg.title && title) agg.title = title;
+      agg.sourceIds.push(p.INVESTIGATOR_LU_ID as number);
+    }
+  }
+  for (const agg of invByKey.values()) {
     const row = await prisma.investigator.create({
       data: {
-        sourceId: p.INVESTIGATOR_LU_ID,
-        firstName: (p.FIRST_NAME ?? '').trim(),
-        middleName: p.MIDDLE_NAME ? String(p.MIDDLE_NAME).trim() : null,
-        lastName: (p.LAST_NAME ?? '').trim(),
-        title: p.TITLE ? String(p.TITLE).trim() : null,
+        sourceId: agg.sourceIds[0],
+        firstName: agg.firstName,
+        middleName: agg.middleName,
+        lastName: agg.lastName,
+        title: agg.title,
       },
     });
-    investigatorIdBySource.set(p.INVESTIGATOR_LU_ID, row.id);
+    for (const sid of agg.sourceIds) investigatorIdBySource.set(sid, row.id);
   }
-  log(`Loaded ${investigatorIdBySource.size} investigators.`);
+  log(`Loaded ${invByKey.size} investigators (de-duped from ${invRows.length} source rows).`);
 
   // ---- 5. Tech categories (parents first, then children) ----
   const categoryIdBySource = new Map<number, number>();
@@ -263,26 +292,37 @@ async function main() {
   }
   log(`Linked ${catLinks.length} project-category rows.`);
 
-  // ---- 9. Project <-> investigator links (all roles) ----
-  const invLinks: {
+  // ---- 9. Project <-> investigator links (de-duped per person/project) ----
+  // After investigator de-duplication a single person can be referenced by several
+  // source xref rows on the same project; collapse them to one link per (project,
+  // person) so nobody appears twice on the detail page. PRINCIPAL wins over CO_INVESTIGATOR.
+  type InvLink = {
     sourceXrefId: number;
     projectId: number;
     investigatorId: number;
     role: InvestigatorRole;
     organizationId: number | null;
-  }[] = [];
+  };
+  const invLinkByPair = new Map<string, InvLink>();
   for (const x of xrefInvestigators) {
     const projectId = projectIdBySource.get(x.INVESTMENT_ID);
     const investigatorId = x.INVESTIGATOR_LU_ID != null ? investigatorIdBySource.get(x.INVESTIGATOR_LU_ID) : undefined;
     if (!projectId || !investigatorId) continue;
-    invLinks.push({
+    const role = x.INVESTIGATOR_TYPE_LU_ID === 2 ? InvestigatorRole.CO_INVESTIGATOR : InvestigatorRole.PRINCIPAL;
+    const link: InvLink = {
       sourceXrefId: x.QC_XREF_INVESTIGATOR_ID,
       projectId,
       investigatorId,
-      role: x.INVESTIGATOR_TYPE_LU_ID === 2 ? InvestigatorRole.CO_INVESTIGATOR : InvestigatorRole.PRINCIPAL,
+      role,
       organizationId: x.CENTER_LU_ID ? orgIdBySource.get(x.CENTER_LU_ID) ?? null : null,
-    });
+    };
+    const key = `${projectId}:${investigatorId}`;
+    const existing = invLinkByPair.get(key);
+    if (!existing || (existing.role !== InvestigatorRole.PRINCIPAL && role === InvestigatorRole.PRINCIPAL)) {
+      invLinkByPair.set(key, link);
+    }
   }
+  const invLinks = [...invLinkByPair.values()];
   if (invLinks.length) {
     await prisma.projectInvestigator.createMany({ data: invLinks, skipDuplicates: true });
   }

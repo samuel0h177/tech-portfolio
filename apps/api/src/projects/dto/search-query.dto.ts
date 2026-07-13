@@ -62,7 +62,7 @@ export class SearchQueryDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(10000)
   @Transform(({ value }) => parseInt(String(value), 10) || 25)
   pageSize = 25;
 }

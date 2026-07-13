@@ -56,6 +56,79 @@ body {
   color: #fff;
 }
 
+/* Compact table view: strong column headings for scanability. */
+.results-table-card {
+  overflow: hidden;
+}
+
+.results-table table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.results-table .v-table__wrapper {
+  overflow-x: hidden;
+}
+
+.results-table__col-project { width: 36%; }
+.results-table__col-pi { width: 14%; }
+.results-table__col-org { width: 16%; }
+.results-table__col-cat { width: 16%; }
+.results-table__col-status { width: 12%; }
+.results-table__col-pdf { width: 6%; }
+
+.results-table thead th {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-weight: 700;
+  font-size: 0.8125rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: normal;
+  line-height: 1.25;
+  border-bottom: none !important;
+  padding-top: 14px !important;
+  padding-bottom: 14px !important;
+  overflow: hidden;
+}
+
+.results-table tbody td {
+  padding-top: 16px !important;
+  padding-bottom: 16px !important;
+  vertical-align: top;
+  overflow: hidden;
+}
+
+.results-table__project {
+  max-width: 0; /* required with table-layout: fixed for ellipsis/clamp */
+}
+
+.results-table__title {
+  font-weight: 500;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.results-table__truncate {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tooltips: fixed high-contrast pair in both themes (theme tokens bleed in dark mode). */
+.esto-tooltip {
+  background: #1f2937 !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  max-width: min(420px, 90vw);
+}
+
 .result-title {
   color: #0b3d91;
   text-decoration: none;

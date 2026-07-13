@@ -87,10 +87,18 @@ export function useProjectSearch() {
     filters.orgTypes = [];
   }
 
+  async function fetchAllResults(): Promise<SearchResponse['data']> {
+    const params = buildParams();
+    params.page = '1';
+    params.pageSize = String(Math.max(results.value.total, 1));
+    const { data } = await api.get<SearchResponse>('/projects', { params });
+    return data.data;
+  }
+
   async function searchPis(q: string): Promise<PiOption[]> {
     const { data } = await api.get<PiOption[]>('/pi', { params: q ? { q } : {} });
     return data;
   }
 
-  return { filters, results, facets, loading, fetchResults, clearFilters, searchPis };
+  return { filters, results, facets, loading, fetchResults, fetchAllResults, clearFilters, searchPis };
 }

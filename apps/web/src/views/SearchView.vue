@@ -111,6 +111,18 @@
               <v-btn value="cards" icon="mdi-view-grid-outline" size="small" />
               <v-btn value="table" icon="mdi-table" size="small" />
             </v-btn-toggle>
+            <v-btn
+              v-if="viewMode === 'table'"
+              variant="outlined"
+              size="small"
+              prepend-icon="mdi-download"
+              class="bg-surface"
+              :loading="exporting"
+              :disabled="!results.total || loading"
+              @click="exportCsv"
+            >
+              Export CSV
+            </v-btn>
           </div>
 
           <v-progress-linear v-if="loading" indeterminate color="primary" class="mb-3" />
@@ -157,43 +169,98 @@
             </div>
 
             <!-- Table view -->
-            <v-card v-else variant="flat" border>
-              <v-table density="comfortable">
+            <v-card v-else variant="flat" border class="results-table-card">
+              <v-table class="results-table">
+                <colgroup>
+                  <col class="results-table__col-project" />
+                  <col class="results-table__col-pi" />
+                  <col class="results-table__col-org" />
+                  <col class="results-table__col-cat" />
+                  <col class="results-table__col-status" />
+                  <col class="results-table__col-pdf" />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th>Program</th>
-                    <th>Project ID</th>
-                    <th>PI</th>
-                    <th>Title</th>
-                    <th>Organization</th>
-                    <th>Category</th>
-                    <th>Status</th>
-                    <th class="text-center">Chart</th>
+                    <th scope="col">Project</th>
+                    <th scope="col">PI</th>
+                    <th scope="col">Organization</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" class="text-center">PDF</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="p in results.data" :key="p.id" style="cursor: pointer" @click="goTo(p.id)">
-                    <td>{{ p.programName || p.programFlag }}</td>
-                    <td class="font-weight-medium">{{ p.projectCode }}</td>
-                    <td class="text-no-wrap">{{ p.pi ? p.pi.lastName + ', ' + p.pi.firstName : '—' }}</td>
-                    <td style="min-width: 280px">{{ p.title }}</td>
-                    <td>{{ p.organization?.name ?? '—' }}</td>
-                    <td>{{ p.categories.map((c) => c.name).join(', ') }}</td>
+                    <td class="results-table__project">
+                      <div class="d-flex align-center flex-wrap ga-2 mb-1">
+                        <span class="text-caption font-weight-bold text-medium-emphasis results-table__truncate">
+                          {{ p.programName || p.programFlag }}
+                        </span>
+                        <span v-if="p.projectCode" class="text-caption font-weight-medium">{{ p.projectCode }}</span>
+                      </div>
+                      <v-tooltip :text="p.title" location="top">
+                        <template #activator="{ props: tipProps }">
+                          <div v-bind="tipProps" class="results-table__title">{{ p.title }}</div>
+                        </template>
+                      </v-tooltip>
+                    </td>
+                    <td>
+                      <v-tooltip
+                        v-if="p.pi"
+                        :text="`${p.pi.lastName}, ${p.pi.firstName}`"
+                        location="top"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <div v-bind="tipProps" class="results-table__truncate">
+                            {{ p.pi.lastName }}, {{ p.pi.firstName }}
+                          </div>
+                        </template>
+                      </v-tooltip>
+                      <span v-else>—</span>
+                    </td>
+                    <td>
+                      <v-tooltip v-if="p.organization" :text="p.organization.name" location="top">
+                        <template #activator="{ props: tipProps }">
+                          <div v-bind="tipProps" class="results-table__truncate">{{ p.organization.name }}</div>
+                        </template>
+                      </v-tooltip>
+                      <span v-else>—</span>
+                    </td>
+                    <td>
+                      <v-tooltip
+                        v-if="p.categories.length"
+                        :text="p.categories.map((c) => c.name).join(', ')"
+                        location="top"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <div v-bind="tipProps" class="results-table__truncate">
+                            {{ p.categories.map((c) => c.name).join(', ') }}
+                          </div>
+                        </template>
+                      </v-tooltip>
+                      <span v-else>—</span>
+                    </td>
                     <td>
                       <v-chip size="x-small" :color="p.completed ? 'success' : 'warning'" variant="tonal" label>
                         {{ p.completed ? 'Complete' : 'Active' }}
                       </v-chip>
                     </td>
-                    <td class="text-center" @click.stop>
-                      <v-btn
-                        v-if="p.quadChartUrl"
-                        :href="p.quadChartUrl"
-                        target="_blank"
-                        icon="mdi-file-chart"
-                        variant="text"
-                        size="small"
-                        color="primary"
-                      />
+                    <td class="text-center text-no-wrap" @click.stop>
+                      <v-tooltip v-if="p.quadChartUrl" text="Open quad chart PDF" location="top">
+                        <template #activator="{ props: tipProps }">
+                          <v-btn
+                            v-bind="tipProps"
+                            :href="p.quadChartUrl"
+                            target="_blank"
+                            icon="mdi-file-pdf-box"
+                            variant="text"
+                            size="small"
+                            color="primary"
+                            aria-label="Open quad chart PDF"
+                          />
+                        </template>
+                      </v-tooltip>
+                      <span v-else class="text-medium-emphasis">—</span>
                     </td>
                   </tr>
                 </tbody>
@@ -212,12 +279,12 @@
                 <span class="text-body-2 font-weight-medium">Per page</span>
                 <v-select
                   v-model="filters.pageSize"
-                  :items="[10, 25, 50, 100]"
+                  :items="pageSizeOptions"
                   density="compact"
                   variant="solo"
                   flat
                   hide-details
-                  style="max-width: 90px"
+                  style="max-width: 100px"
                   bg-color="surface"
                 />
               </div>
@@ -241,13 +308,16 @@ import { useRouter } from 'vue-router';
 import FacetSidebar from '@/components/FacetSidebar.vue';
 import AdvancedSearchHelp from '@/components/AdvancedSearchHelp.vue';
 import { useProjectSearch } from '@/composables/useProjectSearch';
-import type { PiOption } from '@/types';
+import { downloadCsv } from '@/utils/exportCsv';
+import type { PiOption, ProjectListItem } from '@/types';
 
 const router = useRouter();
-const { filters, results, facets, loading, fetchResults, clearFilters, searchPis } = useProjectSearch();
+const { filters, results, facets, loading, fetchResults, fetchAllResults, clearFilters, searchPis } =
+  useProjectSearch();
 
 const viewMode = ref<'cards' | 'table'>('cards');
 const baseTotal = ref(0);
+const exporting = ref(false);
 
 const sortOptions = [
   { title: 'Relevance', value: 'relevance' },
@@ -256,6 +326,16 @@ const sortOptions = [
   { title: 'Completion Year', value: 'completionFy' },
   { title: 'Program', value: 'program' },
   { title: 'Principal Investigator', value: 'pi' },
+];
+
+/** Large enough to fetch the full portfolio when "All" is selected (~1,001 projects). */
+const ALL_PAGE_SIZE = 10_000;
+const pageSizeOptions = [
+  { title: '10', value: 10 },
+  { title: '25', value: 25 },
+  { title: '50', value: 50 },
+  { title: '100', value: 100 },
+  { title: 'All', value: ALL_PAGE_SIZE },
 ];
 
 // PI autocomplete
@@ -280,6 +360,42 @@ const formatNumber = (n: number) => n.toLocaleString('en-US');
 
 function goTo(id: number) {
   router.push({ name: 'project-detail', params: { id } });
+}
+
+const CSV_HEADERS = [
+  'Program',
+  'Project ID',
+  'Title',
+  'Principal Investigator',
+  'Organization',
+  'Category',
+  'Status',
+  'Quad Chart PDF',
+];
+
+function projectToCsvRow(p: ProjectListItem): string[] {
+  return [
+    p.programName || p.programFlag,
+    p.projectCode ?? '',
+    p.title,
+    p.pi ? `${p.pi.lastName}, ${p.pi.firstName}` : '',
+    p.organization?.name ?? '',
+    p.categories.map((c) => c.name).join('; '),
+    p.completed ? 'Complete' : 'Active',
+    p.quadChartUrl ?? '',
+  ];
+}
+
+async function exportCsv() {
+  if (!results.value.total || exporting.value) return;
+  exporting.value = true;
+  try {
+    const rows = await fetchAllResults();
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(`esto-portfolio-${stamp}.csv`, CSV_HEADERS, rows.map(projectToCsvRow));
+  } finally {
+    exporting.value = false;
+  }
 }
 
 onMounted(async () => {

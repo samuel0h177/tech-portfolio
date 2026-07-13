@@ -71,5 +71,7 @@ export default createVuetify({
     VTextField: { variant: 'outlined', density: 'comfortable', hideDetails: 'auto' },
     VSelect: { variant: 'outlined', density: 'comfortable', hideDetails: 'auto' },
     VAutocomplete: { variant: 'outlined', density: 'comfortable', hideDetails: 'auto' },
+    // Pin tooltip colors so theme tokens don't produce low-contrast text in dark mode.
+    VTooltip: { contentClass: 'esto-tooltip' },
   },
 });

@@ -12,7 +12,7 @@
           </div>
         </router-link>
         <v-spacer />
-        <v-btn variant="text" color="white" to="/" prepend-icon="mdi-magnify">Search</v-btn>
+        <v-btn variant="text" color="white" to="/" prepend-icon="mdi-home">Home</v-btn>
         <v-btn
           variant="text"
           color="white"
@@ -22,7 +22,7 @@
         >
           ESTO.nasa.gov
         </v-btn>
-        <v-btn variant="tonal" color="white" to="/admin" prepend-icon="mdi-shield-account">Admin</v-btn>
+        <v-btn variant="text" color="white" to="/admin" prepend-icon="mdi-shield-account">Admin</v-btn>
         <v-btn
           icon
           variant="text"
