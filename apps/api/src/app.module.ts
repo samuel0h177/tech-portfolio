@@ -9,6 +9,7 @@ import { FacetsModule } from './facets/facets.module';
 import { PiModule } from './pi/pi.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminModule } from './admin/admin.module';
+import { AssistantModule } from './assistant/assistant.module';
 
 // Built Vue SPA (apps/web/dist) relative to the compiled API (apps/api/dist).
 const webDist = path.resolve(__dirname, '..', '..', 'web', 'dist');
@@ -37,6 +38,7 @@ const serveSpa = fs.existsSync(webDist);
     PiModule,
     AuthModule,
     AdminModule,
+    AssistantModule,
   ],
 })
 export class AppModule {}

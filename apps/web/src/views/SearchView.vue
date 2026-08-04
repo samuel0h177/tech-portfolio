@@ -303,17 +303,84 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import FacetSidebar from '@/components/FacetSidebar.vue';
 import AdvancedSearchHelp from '@/components/AdvancedSearchHelp.vue';
 import { useProjectSearch } from '@/composables/useProjectSearch';
+import { useAssistantStore, type AssistantSearchFilters } from '@/stores/assistant';
 import { downloadCsv } from '@/utils/exportCsv';
 import type { PiOption, ProjectListItem } from '@/types';
 
 const router = useRouter();
+const assistant = useAssistantStore();
 const { filters, results, facets, loading, fetchResults, fetchAllResults, clearFilters, searchPis } =
   useProjectSearch();
+
+function piFromText(text: string): PiOption | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const comma = trimmed.indexOf(',');
+  if (comma >= 0) {
+    const lastName = trimmed.slice(0, comma).trim();
+    const firstName = trimmed.slice(comma + 1).trim() || lastName;
+    return {
+      id: 0,
+      firstName,
+      lastName,
+      orgCenter: null,
+      label: `${lastName}, ${firstName}`,
+      projectCount: 0,
+    };
+  }
+  return {
+    id: 0,
+    firstName: trimmed,
+    lastName: trimmed,
+    orgCenter: null,
+    label: trimmed,
+    projectCount: 0,
+  };
+}
+
+function applyAssistantFilters(next: AssistantSearchFilters) {
+  if (next.q !== undefined) filters.q = next.q;
+  if (next.program !== undefined) filters.program = next.program;
+  if (next.status !== undefined) filters.status = next.status;
+  if (next.pi !== undefined) filters.pi = next.pi ? piFromText(next.pi) : null;
+  if (next.orgTypes !== undefined) filters.orgTypes = [...next.orgTypes];
+  if (next.categoryIds !== undefined) filters.categoryIds = [...next.categoryIds];
+  filters.page = 1;
+}
+
+watch(
+  () => assistant.pendingSearch,
+  (pending) => {
+    if (!pending) return;
+    const next = assistant.consumePendingSearch();
+    if (next) applyAssistantFilters(next);
+  },
+);
+
+watch(
+  () => [
+    filters.q,
+    filters.program,
+    filters.status,
+    filters.pi,
+    results.value.total,
+  ],
+  () => {
+    assistant.setLiveContext({
+      q: filters.q || undefined,
+      program: filters.program,
+      status: filters.status,
+      pi: filters.pi ? `${filters.pi.lastName}, ${filters.pi.firstName}` : undefined,
+      total: results.value.total,
+    });
+  },
+  { immediate: true },
+);
 
 const viewMode = ref<'cards' | 'table'>('cards');
 const baseTotal = ref(0);
@@ -400,7 +467,15 @@ async function exportCsv() {
 
 onMounted(async () => {
   piItems.value = await searchPis('');
+  if (assistant.pendingSearch) {
+    const pending = assistant.consumePendingSearch();
+    if (pending) applyAssistantFilters(pending);
+  }
   await fetchResults();
   baseTotal.value = results.value.total;
+});
+
+onUnmounted(() => {
+  assistant.setLiveContext(null);
 });
 </script>

@@ -41,6 +41,8 @@
       <router-view />
     </v-main>
 
+    <HelpAgent />
+
     <v-footer color="#1b1f27" class="text-grey-lighten-1">
       <v-container style="max-width: 1400px">
         <v-row>
@@ -64,6 +66,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
 import { useTheme } from 'vuetify';
+import HelpAgent from '@/components/HelpAgent.vue';
 import { useAuthStore } from '@/stores/auth';
 import { DARK_THEME, LIGHT_THEME, THEME_STORAGE_KEY } from '@/plugins/vuetify';
 
