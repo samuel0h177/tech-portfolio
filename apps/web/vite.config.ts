@@ -16,6 +16,19 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            const ct = proxyRes.headers['content-type'];
+            if (typeof ct === 'string' && ct.includes('text/event-stream')) {
+              delete proxyRes.headers['content-length'];
+              proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+              proxyRes.headers['x-accel-buffering'] = 'no';
+              proxyRes.headers['connection'] = 'keep-alive';
+            }
+          });
+        },
       },
     },
   },

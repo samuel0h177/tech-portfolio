@@ -231,6 +231,12 @@ export class AssistantService {
     return this.client;
   }
 
+  private isAbortError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const name = 'name' in err ? String((err as { name: unknown }).name) : '';
+    return name === 'AbortError' || name === 'APIUserAbortError';
+  }
+
   private formatLlmError(err: unknown): string {
     if (!(err instanceof Error)) return String(err);
     const parts = [err.message];
@@ -248,7 +254,11 @@ export class AssistantService {
     return parts.join(' | ');
   }
 
-  async chat(dto: ChatRequestDto, onProgress?: AssistantProgress): Promise<ChatResponseDto> {
+  async chat(
+    dto: ChatRequestDto,
+    onProgress?: AssistantProgress,
+    signal?: AbortSignal,
+  ): Promise<ChatResponseDto> {
     if (!dto.messages?.length) {
       throw new BadRequestException('messages required');
     }
@@ -276,7 +286,13 @@ export class AssistantService {
     this.fitMessagesToBudget(messages);
     emit({ type: 'status', message: 'Reading your question…' });
 
+    const abortedResult = (): ChatResponseDto => ({ message: '', actions });
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      if (signal?.aborted) {
+        this.logger.log('chat aborted by client');
+        return abortedResult();
+      }
       this.fitMessagesToBudget(messages);
       const est = this.estimateMessageChars(messages);
       this.logger.log(
@@ -292,8 +308,12 @@ export class AssistantService {
 
       let assembled: Awaited<ReturnType<AssistantService['streamCompletion']>>;
       try {
-        assembled = await this.streamCompletion(client, model, messages, emit);
+        assembled = await this.streamCompletion(client, model, messages, emit, signal);
       } catch (err) {
+        if (signal?.aborted || this.isAbortError(err)) {
+          this.logger.log('chat aborted by client');
+          return abortedResult();
+        }
         const detail = this.formatLlmError(err);
         this.logger.error(`LM Studio chat.completions failed: ${detail}`, err instanceof Error ? err.stack : undefined);
         const unreachable =
@@ -329,6 +349,11 @@ export class AssistantService {
         throw new BadGatewayException(`LM Studio API call failed: ${detail}`);
       }
 
+      if (signal?.aborted) {
+        this.logger.log('chat aborted by client');
+        return abortedResult();
+      }
+
       const { content, toolCalls } = assembled;
 
       if (!toolCalls.length) {
@@ -348,6 +373,10 @@ export class AssistantService {
       });
 
       for (const call of toolCalls) {
+        if (signal?.aborted) {
+          this.logger.log('chat aborted by client');
+          return abortedResult();
+        }
         const name = call.function.name ?? '';
         let args: Record<string, unknown> = {};
         try {
@@ -395,6 +424,7 @@ export class AssistantService {
     model: string,
     messages: ChatCompletionMessageParam[],
     emit: AssistantProgress,
+    signal?: AbortSignal,
   ): Promise<{
     content: string;
     reasoning: string;
@@ -404,13 +434,16 @@ export class AssistantService {
       function: { name: string; arguments: string };
     }>;
   }> {
-    const stream = await client.chat.completions.create({
-      model,
-      messages,
-      tools: TOOLS,
-      temperature: 0.3,
-      stream: true,
-    });
+    const stream = await client.chat.completions.create(
+      {
+        model,
+        messages,
+        tools: TOOLS,
+        temperature: 0.3,
+        stream: true,
+      },
+      { signal },
+    );
 
     let content = '';
     let reasoning = '';
@@ -418,6 +451,7 @@ export class AssistantService {
     const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      signal?.throwIfAborted();
       const delta = chunk.choices?.[0]?.delta as
         | {
             content?: string | null;

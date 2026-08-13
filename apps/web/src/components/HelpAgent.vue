@@ -17,6 +17,7 @@ interface ChatMessage {
   content: string;
   steps?: TraceStep[];
   pending?: boolean;
+  stopped?: boolean;
 }
 
 interface AssistantAction {
@@ -37,13 +38,6 @@ type StreamEvent =
   | { type: 'error'; message: string }
   | { type: 'done' };
 
-const SUGGESTIONS = [
-  'Find active lidar projects',
-  'How many ESTO projects are completed?',
-  'Show industry-led radar projects',
-  'Who works on formation flying?',
-];
-
 const store = useAssistantStore();
 const router = useRouter();
 const route = useRoute();
@@ -51,6 +45,8 @@ const route = useRoute();
 const input = ref('');
 const sending = ref(false);
 const error = ref('');
+const abortController = ref<AbortController | null>(null);
+let requestId = 0;
 const messages = ref<ChatMessage[]>([
   {
     role: 'assistant',
@@ -59,8 +55,7 @@ const messages = ref<ChatMessage[]>([
   },
 ]);
 const listEl = ref<HTMLElement | null>(null);
-const suggestionsOpen = ref(true);
-
+ 
 const isAdminRoute = computed(() => route.path.startsWith('/admin'));
 const showFab = computed(() => !isAdminRoute.value);
 
@@ -98,11 +93,6 @@ watch(
   },
 );
 
-function useSuggestion(text: string) {
-  input.value = text;
-  void send();
-}
-
 async function applyActions(actions: AssistantAction[]) {
   for (const action of actions) {
     if (action.type === 'apply_search' && action.filters) {
@@ -119,12 +109,44 @@ async function applyActions(actions: AssistantAction[]) {
 
 function historyPayload() {
   return messages.value
-    .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content && !m.pending))
+    .filter(
+      (m) =>
+        m.role === 'user' ||
+        (m.role === 'assistant' && m.content && !m.pending && !m.stopped),
+    )
     .slice(-6)
     .map((m) => ({
       role: m.role,
       content: m.content,
     }));
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === 'AbortError') ||
+    (err instanceof Error && (err.name === 'AbortError' || err.name === 'APIUserAbortError'))
+  );
+}
+
+function finalizeStopped(msg: ChatMessage) {
+  msg.pending = false;
+  if (!msg.content) {
+    msg.content = 'Stopped.';
+    msg.stopped = true;
+  }
+}
+
+function abortCurrent() {
+  abortController.value?.abort();
+  abortController.value = null;
+  const last = messages.value[messages.value.length - 1];
+  if (last?.role === 'assistant' && last.pending) {
+    finalizeStopped(last);
+  }
+}
+
+function stop() {
+  abortCurrent();
 }
 
 function pushStep(msg: ChatMessage, step: TraceStep) {
@@ -156,11 +178,17 @@ function formatStreamError(detail: string, status?: number, baseURL?: string): s
 
 async function send() {
   const text = input.value.trim();
-  if (!text || sending.value) return;
+  if (!text) return;
+
+  abortCurrent();
 
   error.value = '';
   messages.value.push({ role: 'user', content: text });
   input.value = '';
+
+  const id = ++requestId;
+  const ac = new AbortController();
+  abortController.value = ac;
   sending.value = true;
 
   messages.value.push({
@@ -169,6 +197,7 @@ async function send() {
     steps: [],
     pending: true,
   });
+  // Must use the reactive array entry so token/step updates paint live.
   const pending = messages.value[messages.value.length - 1]!;
 
   const payload = {
@@ -199,13 +228,15 @@ async function send() {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     };
-    const token = localStorage.getItem('esto_token');
-    if (token) headers.Authorization = `Bearer ${token}`;
+    const auth = localStorage.getItem('esto_token');
+    if (auth) headers.Authorization = `Bearer ${auth}`;
 
     const res = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      cache: 'no-store',
+      signal: ac.signal,
     });
 
     if (!res.ok) {
@@ -228,6 +259,17 @@ async function send() {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    const appendThinking = (text: string) => {
+      if (!pending.steps) pending.steps = [];
+      const last = pending.steps[pending.steps.length - 1];
+      if (last?.kind === 'thinking') {
+        last.detail = (last.detail || '') + text;
+      } else {
+        pending.steps.push({ kind: 'thinking', label: 'Reasoning', detail: text });
+      }
+      void scrollToBottom();
+    };
+
     const handleEvent = (event: StreamEvent) => {
       switch (event.type) {
         case 'status':
@@ -236,17 +278,9 @@ async function send() {
         case 'thinking':
           pushStep(pending, { kind: 'thinking', label: 'Reasoning', detail: event.text });
           break;
-        case 'thinking_delta': {
-          if (!pending.steps) pending.steps = [];
-          const last = pending.steps[pending.steps.length - 1];
-          if (last?.kind === 'thinking') {
-            last.detail = (last.detail || '') + event.text;
-          } else {
-            pending.steps.push({ kind: 'thinking', label: 'Reasoning', detail: event.text });
-          }
-          void scrollToBottom();
+        case 'thinking_delta':
+          appendThinking(event.text);
           break;
-        }
         case 'token':
           pending.content = (pending.content || '') + event.text;
           void scrollToBottom();
@@ -285,19 +319,23 @@ async function send() {
       const chunks = buffer.split('\n\n');
       buffer = chunks.pop() ?? '';
       for (const chunk of chunks) {
-        const line = chunk
-          .split('\n')
-          .map((l) => l.trim())
-          .find((l) => l.startsWith('data:'));
-        if (!line) continue;
-        const raw = line.slice(5).trim();
-        if (!raw || raw === '[DONE]') continue;
-        try {
-          handleEvent(JSON.parse(raw) as StreamEvent);
-        } catch (parseErr) {
-          console.warn('[HelpAgent] bad SSE chunk', raw, parseErr);
+        for (const line of chunk.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const raw = trimmed.slice(5).trim();
+          if (!raw || raw === '[DONE]') continue;
+          try {
+            handleEvent(JSON.parse(raw) as StreamEvent);
+          } catch (parseErr) {
+            console.warn('[HelpAgent] bad SSE chunk', raw, parseErr);
+          }
         }
       }
+    }
+
+    if (ac.signal.aborted || id !== requestId) {
+      finalizeStopped(pending);
+      return;
     }
 
     pending.pending = false;
@@ -309,6 +347,10 @@ async function send() {
       await applyActions(actions);
     }
   } catch (err: unknown) {
+    if (isAbortError(err) || id !== requestId) {
+      finalizeStopped(pending);
+      return;
+    }
     const ax = err as { message?: string; status?: number };
     const detail = ax.message || 'Unknown error';
     error.value = detail;
@@ -316,7 +358,10 @@ async function send() {
     pending.pending = false;
     pending.content = formatStreamError(detail, ax.status, baseURL);
   } finally {
-    sending.value = false;
+    if (id === requestId) {
+      sending.value = false;
+      if (abortController.value === ac) abortController.value = null;
+    }
     void scrollToBottom();
   }
 }
@@ -470,7 +515,11 @@ function stepIcon(kind: TraceStep['kind']): string {
           class="help-agent-bubble mb-3"
           :class="m.role === 'user' ? 'help-agent-bubble--user' : 'help-agent-bubble--assistant'"
         >
-          <div v-if="m.steps?.length" class="help-agent-trace" :class="{ 'mb-2': !!m.content || m.pending }">
+          <div
+            v-if="m.steps?.length"
+            class="help-agent-trace"
+            :class="{ 'mb-2': !!m.content || m.pending }"
+          >
             <div class="help-agent-trace__title">{{ m.pending ? 'Working…' : 'How I got here' }}</div>
             <div
               v-for="(step, si) in m.steps"
@@ -488,7 +537,10 @@ function stepIcon(kind: TraceStep['kind']): string {
           <div
             v-if="m.content"
             class="help-agent-bubble__text"
-            :class="{ 'help-agent-bubble__text--streaming': m.pending && !!m.content }"
+            :class="{
+              'help-agent-bubble__text--streaming': m.pending && !!m.content,
+              'help-agent-bubble__text--stopped': m.stopped,
+            }"
           >
             {{ m.content }}
           </div>
@@ -502,35 +554,6 @@ function stepIcon(kind: TraceStep['kind']): string {
         </div>
       </div>
 
-      <div class="help-agent-suggestions px-4 pb-2">
-        <div class="help-agent-suggestions__bar d-flex align-center mb-1">
-          <span class="text-caption font-weight-medium text-medium-emphasis">Suggested prompts</span>
-          <v-spacer />
-          <v-btn
-            :icon="suggestionsOpen ? 'mdi-chevron-down' : 'mdi-chevron-up'"
-            variant="text"
-            density="compact"
-            size="small"
-            :aria-label="suggestionsOpen ? 'Minimize suggested prompts' : 'Show suggested prompts'"
-            :title="suggestionsOpen ? 'Minimize' : 'Expand'"
-            @click="suggestionsOpen = !suggestionsOpen"
-          />
-        </div>
-        <div v-show="suggestionsOpen" class="help-agent-suggestions__chips">
-          <v-chip
-            v-for="s in SUGGESTIONS"
-            :key="s"
-            size="small"
-            variant="outlined"
-            class="ma-1"
-            :disabled="sending"
-            @click="useSuggestion(s)"
-          >
-            {{ s }}
-          </v-chip>
-        </div>
-      </div>
-
       <div class="help-agent-composer pa-4 pt-2">
         <v-textarea
           v-model="input"
@@ -541,14 +564,21 @@ function stepIcon(kind: TraceStep['kind']): string {
           placeholder="Ask about projects, PIs, categories…"
           variant="outlined"
           density="comfortable"
-          :disabled="sending"
           @keydown="onKeydown"
         />
-        <div class="d-flex justify-start mt-2 help-agent-composer__actions">
+        <div class="d-flex justify-start mt-2 ga-2 help-agent-composer__actions">
+          <v-btn
+            v-if="sending"
+            color="error"
+            variant="tonal"
+            prepend-icon="mdi-stop"
+            @click="stop"
+          >
+            Stop
+          </v-btn>
           <v-btn
             color="primary"
             prepend-icon="mdi-send"
-            :loading="sending"
             :disabled="!input.trim()"
             @click="send"
           >
@@ -854,8 +884,13 @@ function stepIcon(kind: TraceStep['kind']): string {
   white-space: pre-wrap;
 }
 
+.help-agent-bubble__text--stopped {
+  color: rgba(75, 85, 99, 0.72);
+  font-style: italic;
+}
+
 .help-agent-bubble__text--streaming::after {
-  content: '▍
+  content: "|";
   display: inline-block;
   width: 0.45em;
   margin-left: 1px;
@@ -899,10 +934,6 @@ function stepIcon(kind: TraceStep['kind']): string {
 
 .help-agent-composer__actions {
   max-width: calc(100% - 72px);
-}
-
-.help-agent-suggestions__bar {
-  min-height: 28px;
 }
 
 @keyframes help-float {
