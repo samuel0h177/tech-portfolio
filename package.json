@@ -19,7 +19,15 @@
     "dev:api": "npm run start:dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web && npm run build --workspace apps/api",
-    "start": "node apps/api/dist/main.js"
+    "start": "node apps/api/dist/main.js",
+    "lms:install-cli": "npx lmstudio install-cli",
+    "lms:server": "lms server start --cors && lms server status && lms log stream --stats",
+    "lms:server:stop": "lms server stop",
+    "lms:status": "lms server status",
+    "lms:log": "lms log stream --stats",
+    "lms:log:server": "lms log stream --source server --stats",
+    "lms:ls": "lms ls",
+    "lms:ps": "lms ps"
   },
   "prisma": {
     "schema": "prisma/schema.prisma",
@@ -28,6 +36,7 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.2",
+    "lmstudio": "^0.0.32",
     "mysql2": "^3.22.6",
     "prisma": "^6.1.0",
     "ts-node": "^10.9.2",

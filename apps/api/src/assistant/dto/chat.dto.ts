@@ -44,9 +44,25 @@ export class SearchContextDto {
   total?: number;
 }
 
+export class ProjectContextDto {
+  @Type(() => Number)
+  @IsInt()
+  id!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  projectCode?: string;
+}
+
 export class ChatRequestDto {
   @IsArray()
-  @ArrayMaxSize(20)
+  @ArrayMaxSize(12)
   @ValidateNested({ each: true })
   @Type(() => ChatMessageDto)
   messages!: ChatMessageDto[];
@@ -55,6 +71,11 @@ export class ChatRequestDto {
   @ValidateNested()
   @Type(() => SearchContextDto)
   searchContext?: SearchContextDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ProjectContextDto)
+  projectContext?: ProjectContextDto;
 }
 
 export type ApplySearchFilters = {
@@ -74,3 +95,18 @@ export type ChatResponseDto = {
   message: string;
   actions: AssistantAction[];
 };
+
+/** Server-sent events from POST /assistant/chat/stream */
+export type AssistantStreamEvent =
+  | { type: 'status'; message: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'token'; text: string }
+  | { type: 'reply_reset' }
+  | { type: 'tool_start'; name: string; label: string; args?: Record<string, unknown> }
+  | { type: 'tool_done'; name: string; summary: string }
+  | { type: 'message'; message: string; actions: AssistantAction[] }
+  | { type: 'error'; message: string }
+  | { type: 'done' };
+
+export type AssistantProgress = (event: AssistantStreamEvent) => void;

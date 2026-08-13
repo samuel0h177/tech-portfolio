@@ -171,12 +171,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { api } from '@/api/client';
+import { useAssistantStore } from '@/stores/assistant';
 import type { ProjectDetail, ProjectInvestigator } from '@/types';
 import { ORG_TYPE_LABELS } from '@/types';
 
 const props = defineProps<{ id: string }>();
+const assistant = useAssistantStore();
 
 const project = ref<ProjectDetail | null>(null);
 const loading = ref(false);
@@ -212,15 +214,26 @@ const roleLabel = (role: ProjectInvestigator['role']) =>
 async function load(id: string) {
   loading.value = true;
   error.value = '';
+  assistant.setProjectContext(null);
   try {
     const { data } = await api.get<ProjectDetail>(`/projects/${id}`);
     project.value = data;
+    assistant.setProjectContext({
+      id: data.id,
+      title: data.title,
+      projectCode: data.projectCode,
+    });
   } catch (e: any) {
     error.value = e?.response?.data?.message ?? 'Failed to load project.';
+    project.value = null;
   } finally {
     loading.value = false;
   }
 }
 
 watch(() => props.id, load, { immediate: true });
+
+onUnmounted(() => {
+  assistant.setProjectContext(null);
+});
 </script>

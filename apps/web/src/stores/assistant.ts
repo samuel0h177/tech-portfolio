@@ -18,10 +18,17 @@ export type AssistantLiveContext = {
   total?: number;
 };
 
+export type AssistantProjectContext = {
+  id: number;
+  title?: string;
+  projectCode?: string | null;
+};
+
 export const useAssistantStore = defineStore('assistant', () => {
   const open = ref(false);
   const pendingSearch = ref<AssistantSearchFilters | null>(null);
   const liveContext = ref<AssistantLiveContext | null>(null);
+  const projectContext = ref<AssistantProjectContext | null>(null);
 
   function openPanel() {
     open.value = true;
@@ -49,15 +56,21 @@ export const useAssistantStore = defineStore('assistant', () => {
     liveContext.value = ctx;
   }
 
+  function setProjectContext(ctx: AssistantProjectContext | null) {
+    projectContext.value = ctx;
+  }
+
   return {
     open,
     pendingSearch,
     liveContext,
+    projectContext,
     openPanel,
     closePanel,
     togglePanel,
     requestSearch,
     consumePendingSearch,
     setLiveContext,
+    setProjectContext,
   };
 });

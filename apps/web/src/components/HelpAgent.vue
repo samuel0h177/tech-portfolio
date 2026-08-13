@@ -6,9 +6,17 @@ import { useAssistantStore, type AssistantSearchFilters } from '@/stores/assista
 
 type ChatRole = 'user' | 'assistant';
 
+interface TraceStep {
+  kind: 'status' | 'thinking' | 'tool' | 'tool_done';
+  label: string;
+  detail?: string;
+}
+
 interface ChatMessage {
   role: ChatRole;
   content: string;
+  steps?: TraceStep[];
+  pending?: boolean;
 }
 
 interface AssistantAction {
@@ -17,10 +25,17 @@ interface AssistantAction {
   projectId?: number;
 }
 
-interface ChatResponse {
-  message: string;
-  actions: AssistantAction[];
-}
+type StreamEvent =
+  | { type: 'status'; message: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'token'; text: string }
+  | { type: 'reply_reset' }
+  | { type: 'tool_start'; name: string; label: string; args?: Record<string, unknown> }
+  | { type: 'tool_done'; name: string; summary: string }
+  | { type: 'message'; message: string; actions: AssistantAction[] }
+  | { type: 'error'; message: string }
+  | { type: 'done' };
 
 const SUGGESTIONS = [
   'Find active lidar projects',
@@ -40,13 +55,23 @@ const messages = ref<ChatMessage[]>([
   {
     role: 'assistant',
     content:
-      'Hi — I can answer questions about this ESTO technology portfolio and run searches for you. Try “find active lidar projects” or ask about a PI.',
+      'Hi — I can answer questions about this ESTO technology portfolio and run searches for you. I use a local LM Studio model. Try “find active lidar projects” or ask about a PI.',
   },
 ]);
 const listEl = ref<HTMLElement | null>(null);
+const suggestionsOpen = ref(true);
 
 const isAdminRoute = computed(() => route.path.startsWith('/admin'));
 const showFab = computed(() => !isAdminRoute.value);
+
+const viewingLabel = computed(() => {
+  const p = store.projectContext;
+  if (!p) return '';
+  const code = p.projectCode?.trim();
+  const title = p.title?.trim();
+  if (code && title) return `${code} — ${title}`;
+  return title || code || `Project #${p.id}`;
+});
 
 async function scrollToBottom() {
   await nextTick();
@@ -55,6 +80,14 @@ async function scrollToBottom() {
 
 watch(
   () => messages.value.length,
+  () => scrollToBottom(),
+);
+
+watch(
+  () => {
+    const last = messages.value[messages.value.length - 1];
+    return `${last?.steps?.length ?? 0}:${last?.content?.length ?? 0}`;
+  },
   () => scrollToBottom(),
 );
 
@@ -84,6 +117,43 @@ async function applyActions(actions: AssistantAction[]) {
   }
 }
 
+function historyPayload() {
+  return messages.value
+    .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content && !m.pending))
+    .slice(-6)
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+}
+
+function pushStep(msg: ChatMessage, step: TraceStep) {
+  if (!msg.steps) msg.steps = [];
+  msg.steps.push(step);
+  void scrollToBottom();
+}
+
+function formatStreamError(detail: string, status?: number, baseURL?: string): string {
+  if (!status && /Failed to fetch|NetworkError|Load failed/i.test(detail)) {
+    return `Could not reach the API at ${baseURL}/assistant/chat/stream (${detail}). Is the API running on port 3001?`;
+  }
+  if (
+    status === 503 ||
+    /LM_STUDIO_MODEL|not configured|LLM_PROVIDER|Cannot reach LM Studio|lms server start/i.test(
+      detail,
+    )
+  ) {
+    return (
+      'Local help agent is not ready. Start LM Studio (`lms server start`), load a tool-capable model, set `LM_STUDIO_MODEL` in `.env`, and restart the API. ' +
+      `Details: ${detail}`
+    );
+  }
+  if (status === 502 || /LM Studio API call failed|Context size/i.test(detail)) {
+    return `The API reached LM Studio, but the model call failed: ${detail}`;
+  }
+  return `Assistant error (${status ?? 'unknown'}): ${detail}`;
+}
+
 async function send() {
   const text = input.value.trim();
   if (!text || sending.value) return;
@@ -93,81 +163,161 @@ async function send() {
   input.value = '';
   sending.value = true;
 
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    steps: [],
+    pending: true,
+  });
+  const pending = messages.value[messages.value.length - 1]!;
+
   const payload = {
-    messages: messages.value.slice(-12).map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
+    messages: historyPayload(),
     searchContext: store.liveContext ?? undefined,
+    projectContext: store.projectContext
+      ? {
+          id: store.projectContext.id,
+          title: store.projectContext.title,
+          projectCode: store.projectContext.projectCode ?? undefined,
+        }
+      : undefined,
   };
 
-  const baseURL = api.defaults.baseURL || '/api';
-  console.info('[HelpAgent] POST', `${baseURL}/assistant/chat`, {
+  const baseURL = (api.defaults.baseURL || '/api').replace(/\/$/, '');
+  const url = `${baseURL}/assistant/chat/stream`;
+  console.info('[HelpAgent] POST stream', url, {
     messageCount: payload.messages.length,
     searchContext: payload.searchContext,
+    projectContext: payload.projectContext,
   });
 
+  let actions: AssistantAction[] = [];
+  let gotMessage = false;
+
   try {
-    const { data, status } = await api.post<ChatResponse>('/assistant/chat', payload);
-    console.info('[HelpAgent] response', {
-      status,
-      actions: data.actions?.map((a) => a.type) ?? [],
-      replyPreview: data.message?.slice(0, 120),
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    };
+    const token = localStorage.getItem('esto_token');
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
     });
 
-    messages.value.push({ role: 'assistant', content: data.message });
-    if (data.actions?.length) {
-      await applyActions(data.actions);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { message?: string | string[] };
+        const raw = body.message;
+        detail = Array.isArray(raw) ? raw.join(', ') : raw || detail;
+      } catch {
+        /* ignore */
+      }
+      throw Object.assign(new Error(detail), { status: res.status });
+    }
+
+    if (!res.body) {
+      throw new Error('No response body from chat stream');
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const handleEvent = (event: StreamEvent) => {
+      switch (event.type) {
+        case 'status':
+          pushStep(pending, { kind: 'status', label: event.message });
+          break;
+        case 'thinking':
+          pushStep(pending, { kind: 'thinking', label: 'Reasoning', detail: event.text });
+          break;
+        case 'thinking_delta': {
+          if (!pending.steps) pending.steps = [];
+          const last = pending.steps[pending.steps.length - 1];
+          if (last?.kind === 'thinking') {
+            last.detail = (last.detail || '') + event.text;
+          } else {
+            pending.steps.push({ kind: 'thinking', label: 'Reasoning', detail: event.text });
+          }
+          void scrollToBottom();
+          break;
+        }
+        case 'token':
+          pending.content = (pending.content || '') + event.text;
+          void scrollToBottom();
+          break;
+        case 'reply_reset':
+          if (pending.content) {
+            pushStep(pending, { kind: 'thinking', label: 'Draft', detail: pending.content });
+            pending.content = '';
+          }
+          break;
+        case 'tool_start':
+          pushStep(pending, { kind: 'tool', label: event.label });
+          break;
+        case 'tool_done':
+          pushStep(pending, { kind: 'tool_done', label: event.summary });
+          break;
+        case 'message':
+          pending.content = event.message;
+          actions = event.actions ?? [];
+          gotMessage = true;
+          break;
+        case 'error':
+          error.value = event.message;
+          pending.content = formatStreamError(event.message, undefined, baseURL);
+          gotMessage = true;
+          break;
+        case 'done':
+          break;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() ?? '';
+      for (const chunk of chunks) {
+        const line = chunk
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        const raw = line.slice(5).trim();
+        if (!raw || raw === '[DONE]') continue;
+        try {
+          handleEvent(JSON.parse(raw) as StreamEvent);
+        } catch (parseErr) {
+          console.warn('[HelpAgent] bad SSE chunk', raw, parseErr);
+        }
+      }
+    }
+
+    pending.pending = false;
+    if (!gotMessage && !pending.content) {
+      pending.content = 'Sorry — no response came back from the helper.';
+    }
+
+    if (actions.length) {
+      await applyActions(actions);
     }
   } catch (err: unknown) {
-    const ax = err as {
-      message?: string;
-      code?: string;
-      response?: { status?: number; data?: { message?: string | string[]; statusCode?: number } };
-      config?: { baseURL?: string; url?: string };
-    };
-    const status = ax.response?.status;
-    const raw = ax.response?.data?.message;
-    const apiMessage = Array.isArray(raw) ? raw.join(', ') : raw;
-    const detail =
-      apiMessage ||
-      (status ? `HTTP ${status}` : null) ||
-      ax.message ||
-      'Unknown error';
-
-    console.error('[HelpAgent] request failed', {
-      baseURL: ax.config?.baseURL ?? baseURL,
-      url: ax.config?.url,
-      status,
-      code: ax.code,
-      detail,
-      body: ax.response?.data,
-    });
-
+    const ax = err as { message?: string; status?: number };
+    const detail = ax.message || 'Unknown error';
     error.value = detail;
-    let userFacing: string;
-    if (!ax.response) {
-      userFacing = `Could not reach the API at ${baseURL}/assistant/chat (${detail}). Is the API running on port 3001?`;
-    } else if (
-      status === 503 &&
-      /not configured|GEMINI_API_KEY is missing|Set GEMINI_API_KEY in the environment/i.test(detail)
-    ) {
-      userFacing =
-        'The help agent is not configured yet. Add GEMINI_API_KEY to the API .env and restart the server.';
-    } else if (
-      status === 502 ||
-      /Gemini API|Connect Timeout|fetch failed|UND_ERR_CONNECT_TIMEOUT/i.test(detail)
-    ) {
-      userFacing =
-        'The API is running and your key is loaded, but the call to Google Gemini timed out or failed. ' +
-        'That is usually intermittent outbound network blocking to generativelanguage.googleapis.com. ' +
-        `Details: ${detail}`;
-    } else {
-      userFacing = `Assistant error (${status ?? 'unknown'}): ${detail}`;
-    }
-    messages.value.push({ role: 'assistant', content: userFacing });
+    console.error('[HelpAgent] stream failed', err);
+    pending.pending = false;
+    pending.content = formatStreamError(detail, ax.status, baseURL);
   } finally {
     sending.value = false;
+    void scrollToBottom();
   }
 }
 
@@ -175,6 +325,19 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     void send();
+  }
+}
+
+function stepIcon(kind: TraceStep['kind']): string {
+  switch (kind) {
+    case 'thinking':
+      return 'mdi-brain';
+    case 'tool':
+      return 'mdi-cog-play-outline';
+    case 'tool_done':
+      return 'mdi-check-circle-outline';
+    default:
+      return 'mdi-dots-horizontal-circle-outline';
   }
 }
 </script>
@@ -192,33 +355,69 @@ function onKeydown(e: KeyboardEvent) {
       <span class="help-agent-fab__ring" aria-hidden="true" />
       <span class="help-agent-fab__bubble" aria-hidden="true">
         <span v-if="!store.open" class="help-agent-fab__hint">Ask me!</span>
-        <!-- Cute little satellite buddy -->
+        <!-- Cartoony feminine satellite -->
         <svg
           v-if="!store.open"
           class="help-agent-mascot"
           viewBox="0 0 64 64"
-          width="40"
-          height="40"
+          width="44"
+          height="44"
           aria-hidden="true"
         >
-          <ellipse class="mascot-shadow" cx="32" cy="58" rx="14" ry="3" />
+          <ellipse class="mascot-shadow" cx="32" cy="58" rx="15" ry="3.2" />
           <g class="mascot-body">
-            <line class="mascot-antenna" x1="32" y1="14" x2="32" y2="6" />
-            <circle class="mascot-antenna-tip" cx="32" cy="5" r="3" />
-            <rect class="mascot-panel" x="10" y="28" width="8" height="16" rx="2" />
-            <rect class="mascot-panel" x="46" y="28" width="8" height="16" rx="2" />
-            <rect class="mascot-shell" x="16" y="16" width="32" height="30" rx="10" />
-            <rect class="mascot-face" x="20" y="22" width="24" height="16" rx="6" />
-            <g class="mascot-eyes">
-              <circle class="mascot-eye" cx="27" cy="30" r="2.6" />
-              <circle class="mascot-eye" cx="37" cy="30" r="2.6" />
+            <!-- Solar panels -->
+            <g class="mascot-panel mascot-panel--left">
+              <rect x="2" y="24" width="14" height="20" rx="2.5" />
+              <line x1="5.5" y1="26" x2="5.5" y2="42" />
+              <line x1="9" y1="26" x2="9" y2="42" />
+              <line x1="12.5" y1="26" x2="12.5" y2="42" />
             </g>
-            <path class="mascot-smile" d="M26 34.5c2 2.2 10 2.2 12 0" />
-            <circle class="mascot-blush" cx="23.5" cy="33" r="1.6" />
-            <circle class="mascot-blush" cx="40.5" cy="33" r="1.6" />
+            <g class="mascot-panel mascot-panel--right">
+              <rect x="48" y="24" width="14" height="20" rx="2.5" />
+              <line x1="51.5" y1="26" x2="51.5" y2="42" />
+              <line x1="55" y1="26" x2="55" y2="42" />
+              <line x1="58.5" y1="26" x2="58.5" y2="42" />
+            </g>
+            <line class="mascot-boom" x1="16" y1="34" x2="20" y2="34" />
+            <line class="mascot-boom" x1="44" y1="34" x2="48" y2="34" />
+
+            <!-- Antenna + bow -->
+            <line class="mascot-antenna" x1="32" y1="18" x2="32" y2="7" />
+            <g class="mascot-antenna-tip">
+              <circle cx="32" cy="5.5" r="3.2" />
+              <path class="mascot-bow" d="M26 7.5c2.2-3.5 5.2-1.2 6 0 0.8-1.2 3.8-3.5 6 0-2.4 0.4-4.2 2.2-6 2.2-1.8 0-3.6-1.8-6-2.2z" />
+            </g>
+
+            <!-- Body -->
+            <circle class="mascot-shell" cx="32" cy="34" r="14.5" />
+            <ellipse class="mascot-face" cx="32" cy="33" rx="11" ry="10" />
+            <ellipse class="mascot-shine" cx="26" cy="27" rx="3.2" ry="2.2" />
+
+            <!-- Eyes + lashes -->
+            <g class="mascot-eyes">
+              <g class="mascot-eye-group" transform="translate(26 31)">
+                <path class="mascot-lash" d="M-4.2-4.2 C-3.2-5.6 -1.6-6.2 0-5.4" />
+                <path class="mascot-lash" d="M-1.2-5.8 C0-6.8 1.4-6.8 2.4-5.6" />
+                <path class="mascot-lash" d="M2.2-4.5 C3.4-5.6 4.8-5.2 5.2-3.8" />
+                <circle class="mascot-eye" cx="0" cy="0" r="3.1" />
+                <circle class="mascot-eye-shine" cx="1.1" cy="-1" r="1" />
+              </g>
+              <g class="mascot-eye-group" transform="translate(38 31)">
+                <path class="mascot-lash" d="M-4.2-4.2 C-3.2-5.6 -1.6-6.2 0-5.4" />
+                <path class="mascot-lash" d="M-1.2-5.8 C0-6.8 1.4-6.8 2.4-5.6" />
+                <path class="mascot-lash" d="M2.2-4.5 C3.4-5.6 4.8-5.2 5.2-3.8" />
+                <circle class="mascot-eye" cx="0" cy="0" r="3.1" />
+                <circle class="mascot-eye-shine" cx="1.1" cy="-1" r="1" />
+              </g>
+            </g>
+
+            <path class="mascot-smile" d="M26.5 37.5c2.4 3.2 8.6 3.2 11 0" />
+            <circle class="mascot-blush" cx="23.5" cy="36.5" r="2.1" />
+            <circle class="mascot-blush" cx="40.5" cy="36.5" r="2.1" />
           </g>
         </svg>
-        <v-icon v-else icon="mdi-close" size="28" color="white" />
+        <v-icon v-else icon="mdi-close" size="28" color="#6d28d9" />
       </span>
     </button>
 
@@ -232,25 +431,30 @@ function onKeydown(e: KeyboardEvent) {
       <div class="help-agent-header pa-4">
         <div class="d-flex align-center ga-3">
           <div class="help-agent-header-mascot" aria-hidden="true">
-            <svg viewBox="0 0 64 64" width="36" height="36">
-              <rect fill="#0b3d91" x="16" y="16" width="32" height="30" rx="10" />
-              <rect fill="#e8f2ff" x="20" y="22" width="24" height="16" rx="6" />
-              <circle fill="#0b3d91" cx="27" cy="30" r="2.4" />
-              <circle fill="#0b3d91" cx="37" cy="30" r="2.4" />
-              <path
-                fill="none"
-                stroke="#0b3d91"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                d="M26 34.5c2 2.2 10 2.2 12 0"
-              />
-              <circle fill="#8fd1fb" cx="32" cy="5" r="3" />
-              <line stroke="#8fd1fb" stroke-width="2" x1="32" y1="14" x2="32" y2="7" />
+            <svg viewBox="0 0 64 64" width="38" height="38">
+              <rect fill="#c4b5fd" x="4" y="26" width="12" height="16" rx="2" />
+              <rect fill="#c4b5fd" x="48" y="26" width="12" height="16" rx="2" />
+              <line stroke="#a78bfa" stroke-width="2" x1="16" y1="34" x2="20" y2="34" />
+              <line stroke="#a78bfa" stroke-width="2" x1="44" y1="34" x2="48" y2="34" />
+              <line stroke="#f9a8d4" stroke-width="2.2" stroke-linecap="round" x1="32" y1="18" x2="32" y2="8" />
+              <circle fill="#fbbf24" cx="32" cy="6" r="2.8" />
+              <circle fill="#f3e8ff" cx="32" cy="34" r="13" />
+              <ellipse fill="#fff7fb" cx="32" cy="33" rx="10" ry="9" />
+              <circle fill="#6d28d9" cx="26.5" cy="31" r="2.6" />
+              <circle fill="#6d28d9" cx="37.5" cy="31" r="2.6" />
+              <circle fill="#fff" cx="27.4" cy="30.2" r="0.8" />
+              <circle fill="#fff" cx="38.4" cy="30.2" r="0.8" />
+              <path fill="none" stroke="#6d28d9" stroke-width="1.7" stroke-linecap="round" d="M27 37c2 2.6 8 2.6 10 0" />
+              <circle fill="#fda4af" cx="24" cy="36" r="1.7" opacity="0.85" />
+              <circle fill="#fda4af" cx="40" cy="36" r="1.7" opacity="0.85" />
             </svg>
           </div>
           <div>
             <div class="text-subtitle-1 font-weight-bold">Portfolio Helper</div>
             <div class="text-caption text-medium-emphasis">Ask questions or run a search</div>
+            <div v-if="viewingLabel" class="text-caption help-agent-viewing mt-1">
+              Viewing: {{ viewingLabel }}
+            </div>
           </div>
           <v-spacer />
           <v-btn icon="mdi-close" variant="text" density="comfortable" @click="store.closePanel()" />
@@ -266,26 +470,65 @@ function onKeydown(e: KeyboardEvent) {
           class="help-agent-bubble mb-3"
           :class="m.role === 'user' ? 'help-agent-bubble--user' : 'help-agent-bubble--assistant'"
         >
-          {{ m.content }}
-        </div>
-        <div v-if="sending" class="text-caption text-medium-emphasis d-flex align-center ga-2">
-          <v-progress-circular indeterminate size="16" width="2" />
-          Looking that up…
+          <div v-if="m.steps?.length" class="help-agent-trace" :class="{ 'mb-2': !!m.content || m.pending }">
+            <div class="help-agent-trace__title">{{ m.pending ? 'Working…' : 'How I got here' }}</div>
+            <div
+              v-for="(step, si) in m.steps"
+              :key="si"
+              class="help-agent-trace__step"
+              :class="`help-agent-trace__step--${step.kind}`"
+            >
+              <v-icon size="14" class="help-agent-trace__icon">{{ stepIcon(step.kind) }}</v-icon>
+              <div class="help-agent-trace__body">
+                <div class="help-agent-trace__label">{{ step.label }}</div>
+                <div v-if="step.detail" class="help-agent-trace__detail">{{ step.detail }}</div>
+              </div>
+            </div>
+          </div>
+          <div
+            v-if="m.content"
+            class="help-agent-bubble__text"
+            :class="{ 'help-agent-bubble__text--streaming': m.pending && !!m.content }"
+          >
+            {{ m.content }}
+          </div>
+          <div
+            v-else-if="m.pending"
+            class="text-caption text-medium-emphasis d-flex align-center ga-2"
+          >
+            <v-progress-circular indeterminate size="16" width="2" />
+            Thinking…
+          </div>
         </div>
       </div>
 
       <div class="help-agent-suggestions px-4 pb-2">
-        <v-chip
-          v-for="s in SUGGESTIONS"
-          :key="s"
-          size="small"
-          variant="outlined"
-          class="ma-1"
-          :disabled="sending"
-          @click="useSuggestion(s)"
-        >
-          {{ s }}
-        </v-chip>
+        <div class="help-agent-suggestions__bar d-flex align-center mb-1">
+          <span class="text-caption font-weight-medium text-medium-emphasis">Suggested prompts</span>
+          <v-spacer />
+          <v-btn
+            :icon="suggestionsOpen ? 'mdi-chevron-down' : 'mdi-chevron-up'"
+            variant="text"
+            density="compact"
+            size="small"
+            :aria-label="suggestionsOpen ? 'Minimize suggested prompts' : 'Show suggested prompts'"
+            :title="suggestionsOpen ? 'Minimize' : 'Expand'"
+            @click="suggestionsOpen = !suggestionsOpen"
+          />
+        </div>
+        <div v-show="suggestionsOpen" class="help-agent-suggestions__chips">
+          <v-chip
+            v-for="s in SUGGESTIONS"
+            :key="s"
+            size="small"
+            variant="outlined"
+            class="ma-1"
+            :disabled="sending"
+            @click="useSuggestion(s)"
+          >
+            {{ s }}
+          </v-chip>
+        </div>
       </div>
 
       <div class="help-agent-composer pa-4 pt-2">
@@ -301,7 +544,7 @@ function onKeydown(e: KeyboardEvent) {
           :disabled="sending"
           @keydown="onKeydown"
         />
-        <div class="d-flex justify-end mt-2">
+        <div class="d-flex justify-start mt-2 help-agent-composer__actions">
           <v-btn
             color="primary"
             prepend-icon="mdi-send"
@@ -336,7 +579,7 @@ function onKeydown(e: KeyboardEvent) {
   position: absolute;
   inset: 4px;
   border-radius: 50%;
-  background: rgba(11, 61, 145, 0.18);
+  background: rgba(167, 139, 250, 0.28);
   transform: scale(0.92);
   opacity: 0;
 }
@@ -347,10 +590,10 @@ function onKeydown(e: KeyboardEvent) {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: linear-gradient(160deg, #1a75cf 0%, #0b3d91 70%);
+  background: linear-gradient(160deg, #e9d5ff 0%, #c4b5fd 45%, #a78bfa 100%);
   box-shadow:
-    0 10px 24px rgba(11, 61, 145, 0.35),
-    0 2px 0 rgba(255, 255, 255, 0.18) inset;
+    0 10px 24px rgba(139, 92, 246, 0.32),
+    0 2px 0 rgba(255, 255, 255, 0.35) inset;
   transition:
     transform 180ms ease,
     box-shadow 180ms ease;
@@ -364,12 +607,12 @@ function onKeydown(e: KeyboardEvent) {
   white-space: nowrap;
   padding: 6px 10px;
   border-radius: 999px;
-  background: #0b3d91;
+  background: #a78bfa;
   color: #fff;
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  box-shadow: 0 6px 16px rgba(11, 61, 145, 0.28);
+  box-shadow: 0 6px 16px rgba(139, 92, 246, 0.28);
   opacity: 0;
   pointer-events: none;
   animation: help-hint-pop 7s ease-in-out infinite;
@@ -382,7 +625,7 @@ function onKeydown(e: KeyboardEvent) {
   top: 50%;
   width: 10px;
   height: 10px;
-  background: #0b3d91;
+  background: #a78bfa;
   transform: translateY(-50%) rotate(45deg);
 }
 
@@ -390,8 +633,8 @@ function onKeydown(e: KeyboardEvent) {
 .help-agent-fab:focus-visible .help-agent-fab__bubble {
   transform: scale(1.06);
   box-shadow:
-    0 14px 28px rgba(11, 61, 145, 0.42),
-    0 2px 0 rgba(255, 255, 255, 0.22) inset;
+    0 14px 28px rgba(139, 92, 246, 0.4),
+    0 2px 0 rgba(255, 255, 255, 0.4) inset;
 }
 
 .help-agent-fab:focus-visible {
@@ -399,7 +642,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .help-agent-fab:focus-visible .help-agent-fab__bubble {
-  outline: 2px solid #8fd1fb;
+  outline: 2px solid #f5d0fe;
   outline-offset: 3px;
 }
 
@@ -416,7 +659,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .help-agent-fab--open .help-agent-fab__bubble {
-  background: linear-gradient(160deg, #3d4a63 0%, #1b1f27 75%);
+  background: linear-gradient(160deg, #e9d5ff 0%, #c4b5fd 45%, #a78bfa 100%);
 }
 
 .help-agent-mascot {
@@ -424,47 +667,81 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .mascot-shell {
-  fill: #f4f8ff;
+  fill: #faf5ff;
+  stroke: #ddd6fe;
+  stroke-width: 1.2;
 }
 
 .mascot-face {
-  fill: #dcecff;
+  fill: #fff7fb;
 }
 
-.mascot-panel {
-  fill: #8fd1fb;
+.mascot-shine {
+  fill: rgba(255, 255, 255, 0.75);
 }
 
-.mascot-antenna {
-  stroke: #8fd1fb;
-  stroke-width: 2.5;
+.mascot-panel rect {
+  fill: #c4b5fd;
+  stroke: #a78bfa;
+  stroke-width: 1;
+}
+
+.mascot-panel line {
+  stroke: #ddd6fe;
+  stroke-width: 1.1;
+}
+
+.mascot-boom {
+  stroke: #a78bfa;
+  stroke-width: 2.2;
   stroke-linecap: round;
 }
 
-.mascot-antenna-tip {
-  fill: #ffd166;
+.mascot-antenna {
+  stroke: #f9a8d4;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.mascot-antenna-tip circle {
+  fill: #fbbf24;
+}
+
+.mascot-bow {
+  fill: #f472b6;
 }
 
 .mascot-eye {
-  fill: #0b3d91;
+  fill: #6d28d9;
   transform-origin: center;
   transform-box: fill-box;
 }
 
+.mascot-eye-shine {
+  fill: #ffffff;
+}
+
+.mascot-lash {
+  fill: none;
+  stroke: #6d28d9;
+  stroke-width: 1.15;
+  stroke-linecap: round;
+}
+
 .mascot-smile {
   fill: none;
-  stroke: #0b3d91;
+  stroke: #7c3aed;
   stroke-width: 1.8;
   stroke-linecap: round;
 }
 
 .mascot-blush {
-  fill: #ff9eb5;
-  opacity: 0.7;
+  fill: #fb7185;
+  opacity: 0.75;
 }
 
 .mascot-shadow {
-  fill: rgba(8, 20, 48, 0.22);
+  fill: rgba(88, 28, 135, 0.22);
 }
 
 .help-agent-fab--idle .mascot-body {
@@ -492,7 +769,7 @@ function onKeydown(e: KeyboardEvent) {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: linear-gradient(160deg, rgba(26, 117, 207, 0.18), rgba(11, 61, 145, 0.1));
+  background: linear-gradient(160deg, rgba(233, 213, 255, 0.9), rgba(196, 181, 253, 0.55));
 }
 
 .help-agent-drawer {
@@ -501,7 +778,17 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .help-agent-header {
-  background: linear-gradient(135deg, rgba(11, 61, 145, 0.12), rgba(26, 117, 207, 0.06));
+  background: linear-gradient(135deg, rgba(196, 181, 253, 0.22), rgba(233, 213, 255, 0.12));
+}
+
+.help-agent-viewing {
+  color: #7c3aed;
+  font-weight: 600;
+  line-height: 1.3;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .help-agent-messages {
@@ -509,6 +796,77 @@ function onKeydown(e: KeyboardEvent) {
   overflow-y: auto;
   min-height: 280px;
   max-height: calc(100vh - 320px);
+}
+
+.help-agent-trace {
+  border-left: 2px solid rgba(124, 58, 237, 0.28);
+  padding: 4px 0 4px 10px;
+  margin-bottom: 2px;
+}
+
+.help-agent-trace__title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #7c3aed;
+  margin-bottom: 6px;
+}
+
+.help-agent-trace__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.help-agent-trace__step:last-child {
+  margin-bottom: 0;
+}
+
+.help-agent-trace__icon {
+  margin-top: 1px;
+  color: #8b5cf6;
+  opacity: 0.9;
+}
+
+.help-agent-trace__label {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: rgba(55, 48, 80, 0.88);
+}
+
+.help-agent-trace__detail {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: rgba(75, 85, 99, 0.92);
+  white-space: pre-wrap;
+  max-height: 7.5rem;
+  overflow: auto;
+}
+
+.help-agent-trace__step--thinking .help-agent-trace__detail {
+  font-style: italic;
+}
+
+.help-agent-bubble__text {
+  white-space: pre-wrap;
+}
+
+.help-agent-bubble__text--streaming::after {
+  content: '▍
+  display: inline-block;
+  width: 0.45em;
+  margin-left: 1px;
+  color: #7c3aed;
+  animation: help-caret 0.9s steps(1) infinite;
+}
+
+@keyframes help-caret {
+  50% {
+    opacity: 0;
+  }
 }
 
 .help-agent-bubble {
@@ -535,6 +893,16 @@ function onKeydown(e: KeyboardEvent) {
 
 .help-agent-composer {
   border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  /* Keep send clear of the floating close FAB in the bottom-right */
+  padding-bottom: 88px !important;
+}
+
+.help-agent-composer__actions {
+  max-width: calc(100% - 72px);
+}
+
+.help-agent-suggestions__bar {
+  min-height: 28px;
 }
 
 @keyframes help-float {

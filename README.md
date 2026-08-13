@@ -3,7 +3,7 @@
 A modern remake of the NASA [ESTO Technology Portfolio](https://esto.nasa.gov/TechPortfolio/) search. It rebuilds the legacy ColdFusion experience (keyword / PI / faceted search, sortable results, quad-chart PDFs, documents) with:
 
 - **MySQL 9** — dedicated `esto_portfolio` database
-- **NestJS + Prisma** — REST API (search, facets, auth, admin CRUD, Gemini help agent)
+- **NestJS + Prisma** — REST API (search, facets, auth, admin CRUD, local LM Studio help agent)
 - **Vue 3 + Vuetify** — faceted, responsive SPA styled after NASA/ESTO
 - **Scraper / ETL** — load real project data from the live TechPortfolio or a source MySQL dump
 
@@ -35,12 +35,12 @@ flowchart LR
 
   db[(MySQL_esto_portfolio)]
   nasa[esto.nasa.gov]
-  gemini[Google_Gemini]
+  lms[LM_Studio_local]
 
   spa -->|REST_/api| api
   adminUi -->|JWT_/api| api
   api --> db
-  api -->|function_calling| gemini
+  api -->|OpenAI_compat_tools| lms
   api -->|PDF_proxy| nasa
   api -.->|prod_serves| webDist
   nasa -.->|scrape_or_ETL| db
@@ -119,39 +119,67 @@ flowchart LR
   nest --> mysql
 ```
 
-### Help Agent (Gemini)
+### Help Agent (local LM Studio)
 
-The floating **Portfolio Helper** answers portfolio questions and can apply search filters or open project pages. The API calls Gemini (`gemini-3.6-flash`) with tools over the existing search layer.
+The floating **Portfolio Helper** answers portfolio questions and can apply search filters or open project pages. NestJS calls a **local LM Studio** server over the [OpenAI-compatible tools API](https://lmstudio.ai/docs/developer/openai-compat/tools) and executes portfolio tools itself (search, project detail, apply filters, open project).
 
-1. Create a key at [Google AI Studio](https://aistudio.google.com/apikey).
-2. Set `GEMINI_API_KEY` in `.env`.
-3. Restart `npm run dev:api`.
+On a project detail page, the agent also receives the **current project** as context.
 
-Without a key, the chat UI still appears but returns a configuration message. Outbound HTTPS to `generativelanguage.googleapis.com` must be reachable from the API host.
+#### Setup
+
+1. Install [LM Studio](https://lmstudio.ai/). This repo includes the `lmstudio` npm package so you can bootstrap the [`lms` CLI](https://lmstudio.ai/docs/cli) if needed:
+
+```bash
+npm run lms:install-cli   # once — adds lms to PATH (restart terminal/editor if needed)
+npm run lms:ls            # models on disk
+```
+
+2. Load a **tool-capable** model (Qwen / Llama / Granite instruction models work well), then start the local server ([quickstart](https://lmstudio.ai/docs/developer/rest/quickstart)):
+
+```bash
+npm run lms:server        # start (CORS on) + print status + stream live request/prediction logs
+# default: http://127.0.0.1:1234 — leave this terminal open to watch traffic
+npm run lms:log           # stream logs only (if server already running)
+npm run lms:ps            # confirm a model is loaded
+```
+
+3. In `.env`:
+
+| Variable | Example | Notes |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `lmstudio` | Default local provider |
+| `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234/v1` | OpenAI-compat base |
+| `LM_STUDIO_MODEL` | *(id from LM Studio)* | Required — exact loaded model id (`lms ls` / `lms ps`) |
+| `LM_STUDIO_API_TOKEN` | *(optional)* | Only if API auth is enabled in LM Studio |
+
+4. Restart `npm run dev:api`.
+
+Without LM Studio running or `LM_STUDIO_MODEL` set, the chat UI still appears but returns a configuration / connection message.
 
 ```mermaid
 sequenceDiagram
   participant User
   participant Web as HelpAgent_UI
   participant API as Nest_assistant
-  participant Gemini
+  participant LMS as LMStudio_v1
   participant DB as MySQL
 
   User->>Web: Ask_question
-  Web->>API: POST_/api/assistant/chat
-  API->>Gemini: generateContent_plus_tools
+  Web->>API: POST_/api/assistant/chat/stream
+  API-->>Web: SSE_status_thinking_tools
+  API->>LMS: chat_completions_plus_tools
   alt Needs_portfolio_data
-    Gemini-->>API: tool_search_projects
-    API->>DB: ProjectsService.search
+    LMS-->>API: tool_calls
+    API->>DB: search_or_get_project
     DB-->>API: rows
-    API-->>Gemini: tool_result
+    API->>LMS: tool_results
   end
   alt Update_UI
-    Gemini-->>API: tool_apply_search_or_open_project
+    LMS-->>API: apply_search_or_open_project
     API-->>Web: message_plus_actions
     Web->>User: Apply_filters_or_navigate
   else Answer_only
-    Gemini-->>API: text
+    LMS-->>API: text
     API-->>Web: message
     Web->>User: Show_reply
   end
@@ -215,7 +243,7 @@ flowchart LR
 | `JWT_SECRET` | Long random string |
 | `JWT_EXPIRES_IN` | e.g. `12h` |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Admin login |
-| `GEMINI_API_KEY` | Optional; enables Help Agent in prod |
+| `LLM_PROVIDER` / `LM_STUDIO_*` | Optional on Railway; Help Agent needs a reachable LLM (local LM Studio is for dev) |
 
 `PORT` is injected by Railway. Leave `VITE_API_BASE_URL` **unset** so the SPA uses same-origin `/api`.
 
@@ -251,7 +279,7 @@ Slower alternative: point `DATABASE_URL` at the proxy, `SOURCE_DATABASE_URL` at 
 - Contextual facets with live counts (program, status, category tree, org type)
 - PI autocomplete, sort, card / table views, pagination, CSV export of all matches
 - Project detail: team, TRL ladder, categories, embedded quad-chart PDF, document links
-- Help Agent: natural-language Q&A + apply search / open project
+- Help Agent: natural-language Q&A via local LM Studio + apply search / open project; aware of the current project detail page
 
 ### Admin (JWT-protected)
 
@@ -276,7 +304,8 @@ flowchart TD
 | GET | `/api/projects/:id/quad-chart` | Same-origin PDF proxy for iframe embed |
 | GET | `/api/facets` | Contextual facet counts |
 | GET | `/api/pi` | PI autocomplete |
-| POST | `/api/assistant/chat` | Gemini help agent (tool-calling) |
+| POST | `/api/assistant/chat` | Help agent (JSON) |
+| POST | `/api/assistant/chat/stream` | Help agent (SSE: status, thinking, tools, token stream, answer) |
 | POST | `/api/auth/login` | Admin login (JWT) |
 | GET | `/api/auth/me` | Current admin |
 | * | `/api/admin/**` | Guarded CRUD |
@@ -287,4 +316,4 @@ flowchart TD
 
 - Legacy scrape results often omit abstracts / TRL; those can be curated in admin (quad charts usually contain the detail).
 - PDFs are hot-linked; files are not stored locally.
-- Help Agent needs a valid `GEMINI_API_KEY` **and** outbound access to Google’s Generative Language API.
+- Help Agent needs LM Studio running locally with `LM_STUDIO_MODEL` set (see Help Agent section).
