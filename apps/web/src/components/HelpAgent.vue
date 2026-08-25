@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api/client';
 import { useAssistantStore, type AssistantSearchFilters } from '@/stores/assistant';
+import { usePortfolioContextStore } from '@/stores/portfolioContext';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -39,6 +40,7 @@ type StreamEvent =
   | { type: 'done' };
 
 const store = useAssistantStore();
+const portfolio = usePortfolioContextStore();
 const router = useRouter();
 const route = useRoute();
 
@@ -51,7 +53,7 @@ const messages = ref<ChatMessage[]>([
   {
     role: 'assistant',
     content:
-      'Hi — I can answer questions about this ESTO technology portfolio and run searches for you. I use a local LM Studio model. Try “find active lidar projects” or ask about a PI.',
+      'Hi — I can answer questions about this ESTO technology portfolio and run searches for you. Try “find active lidar projects” or ask about a PI.',
   },
 ]);
 const listEl = ref<HTMLElement | null>(null);
@@ -60,7 +62,7 @@ const isAdminRoute = computed(() => route.path.startsWith('/admin'));
 const showFab = computed(() => !isAdminRoute.value);
 
 const viewingLabel = computed(() => {
-  const p = store.projectContext;
+  const p = portfolio.projectContext;
   if (!p) return '';
   const code = p.projectCode?.trim();
   const title = p.title?.trim();
@@ -161,17 +163,23 @@ function formatStreamError(detail: string, status?: number, baseURL?: string): s
   }
   if (
     status === 503 ||
-    /LM_STUDIO_MODEL|not configured|LLM_PROVIDER|Cannot reach LM Studio|lms server start/i.test(
+    /GEMINI_API_KEY|LM_STUDIO_MODEL|not configured|LLM_PROVIDER|Cannot reach LM Studio|Cannot reach the Gemini API|lms server start/i.test(
       detail,
     )
   ) {
+    if (/GEMINI_API_KEY|Gemini API/i.test(detail)) {
+      return (
+        'Help agent is not ready. Set `GEMINI_API_KEY` in `.env` and restart the API. ' +
+        `Details: ${detail}`
+      );
+    }
     return (
       'Local help agent is not ready. Start LM Studio (`lms server start`), load a tool-capable model, set `LM_STUDIO_MODEL` in `.env`, and restart the API. ' +
       `Details: ${detail}`
     );
   }
-  if (status === 502 || /LM Studio API call failed|Context size/i.test(detail)) {
-    return `The API reached LM Studio, but the model call failed: ${detail}`;
+  if (status === 502 || /Gemini API call failed|LM Studio API call failed|Context size/i.test(detail)) {
+    return `The model call failed: ${detail}`;
   }
   return `Assistant error (${status ?? 'unknown'}): ${detail}`;
 }
@@ -202,12 +210,12 @@ async function send() {
 
   const payload = {
     messages: historyPayload(),
-    searchContext: store.liveContext ?? undefined,
-    projectContext: store.projectContext
+    searchContext: portfolio.liveContext ?? undefined,
+    projectContext: portfolio.projectContext
       ? {
-          id: store.projectContext.id,
-          title: store.projectContext.title,
-          projectCode: store.projectContext.projectCode ?? undefined,
+          id: portfolio.projectContext.id,
+          title: portfolio.projectContext.title,
+          projectCode: portfolio.projectContext.projectCode ?? undefined,
         }
       : undefined,
   };
@@ -470,6 +478,7 @@ function stepIcon(kind: TraceStep['kind']): string {
       v-model="store.open"
       location="right"
       temporary
+      :scrim="false"
       width="400"
       class="help-agent-drawer"
     >

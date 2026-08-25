@@ -173,12 +173,12 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { api } from '@/api/client';
-import { useAssistantStore } from '@/stores/assistant';
+import { usePortfolioContextStore } from '@/stores/portfolioContext';
 import type { ProjectDetail, ProjectInvestigator } from '@/types';
 import { ORG_TYPE_LABELS } from '@/types';
 
 const props = defineProps<{ id: string }>();
-const assistant = useAssistantStore();
+const portfolio = usePortfolioContextStore();
 
 const project = ref<ProjectDetail | null>(null);
 const loading = ref(false);
@@ -214,11 +214,11 @@ const roleLabel = (role: ProjectInvestigator['role']) =>
 async function load(id: string) {
   loading.value = true;
   error.value = '';
-  assistant.setProjectContext(null);
+  portfolio.setProjectContext(null);
   try {
     const { data } = await api.get<ProjectDetail>(`/projects/${id}`);
     project.value = data;
-    assistant.setProjectContext({
+    portfolio.setProjectContext({
       id: data.id,
       title: data.title,
       projectCode: data.projectCode,
@@ -234,6 +234,6 @@ async function load(id: string) {
 watch(() => props.id, load, { immediate: true });
 
 onUnmounted(() => {
-  assistant.setProjectContext(null);
+  portfolio.setProjectContext(null);
 });
 </script>

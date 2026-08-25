@@ -309,11 +309,13 @@ import FacetSidebar from '@/components/FacetSidebar.vue';
 import AdvancedSearchHelp from '@/components/AdvancedSearchHelp.vue';
 import { useProjectSearch } from '@/composables/useProjectSearch';
 import { useAssistantStore, type AssistantSearchFilters } from '@/stores/assistant';
+import { usePortfolioContextStore } from '@/stores/portfolioContext';
 import { downloadCsv } from '@/utils/exportCsv';
 import type { PiOption, ProjectListItem } from '@/types';
 
 const router = useRouter();
 const assistant = useAssistantStore();
+const portfolio = usePortfolioContextStore();
 const { filters, results, facets, loading, fetchResults, fetchAllResults, clearFilters, searchPis } =
   useProjectSearch();
 
@@ -371,7 +373,7 @@ watch(
     results.value.total,
   ],
   () => {
-    assistant.setLiveContext({
+    portfolio.setLiveContext({
       q: filters.q || undefined,
       program: filters.program,
       status: filters.status,
@@ -476,6 +478,6 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  assistant.setLiveContext(null);
+  portfolio.setLiveContext(null);
 });
 </script>

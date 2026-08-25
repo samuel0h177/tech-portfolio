@@ -41,7 +41,7 @@
       <router-view />
     </v-main>
 
-    <HelpAgent />
+    <HelpAgent v-if="helpAgentEnabled" />
 
     <v-footer color="#1b1f27" class="text-grey-lighten-1">
       <v-container style="max-width: 1400px">
@@ -69,6 +69,9 @@ import { useTheme } from 'vuetify';
 import HelpAgent from '@/components/HelpAgent.vue';
 import { useAuthStore } from '@/stores/auth';
 import { DARK_THEME, LIGHT_THEME, THEME_STORAGE_KEY } from '@/plugins/vuetify';
+import { viteFlagEnabled } from '@/utils/viteFlag';
+
+const helpAgentEnabled = viteFlagEnabled(import.meta.env.VITE_ENABLE_HELP_AGENT);
 
 const auth = useAuthStore();
 onMounted(() => auth.fetchMe());
